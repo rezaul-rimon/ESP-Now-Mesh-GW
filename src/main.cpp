@@ -2,7 +2,27 @@
 #include <esp_now.h>
 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-const char* gatewayID = "GW01";  // ✅ Unique Gateway ID
+const char* gatewayID = "GW01";
+
+void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
+  String msg = "";
+  for (int i = 0; i < len; i++) {
+    msg += (char)incomingData[i];
+  }
+
+  // 📥 Print message from node
+  int separator = msg.indexOf(',');
+  if (separator != -1) {
+    String nodeID = msg.substring(0, separator);
+    String content = msg.substring(separator + 1);
+    Serial.print("📡 From Node: ");
+    Serial.println(nodeID);
+    Serial.print("📩 Message: ");
+    Serial.println(content);
+  } else {
+    Serial.println("⚠️ Malformed message from node.");
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -22,12 +42,14 @@ void setup() {
     Serial.println("Broadcast peer added.");
   }
 
+  esp_now_register_recv_cb(onReceive);  // ✅ Enable receiving from nodes
+
   Serial.println("Gateway Ready.");
 }
 
 void loop() {
-  String msg = String(gatewayID) + "," + "Hello ESP-NOW";  // 👈 Add gateway ID
+  String msg = String(gatewayID) + "," + "hello-node";
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)msg.c_str(), msg.length());
-  Serial.println(result == ESP_OK ? "✅ Sent!" : "❌ Send Failed");
-  delay(3000);
+  Serial.println(result == ESP_OK ? "✅ Sent hello-node!" : "❌ Send Failed");
+  delay(5000);  // ⏳ Every 5 seconds
 }
