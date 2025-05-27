@@ -1,26 +1,30 @@
 #include <WiFi.h>
 #include <esp_now.h>
 
+const char* gatewayID = "GW0";
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-const char* gatewayID = "GW01";
 
+String inputBuffer = "";
+
+// 📥 Callback when data is received
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   String msg = "";
   for (int i = 0; i < len; i++) {
     msg += (char)incomingData[i];
   }
 
-  // 📥 Print message from node
-  int separator = msg.indexOf(',');
-  if (separator != -1) {
-    String nodeID = msg.substring(0, separator);
-    String content = msg.substring(separator + 1);
-    Serial.print("📡 From Node: ");
-    Serial.println(nodeID);
-    Serial.print("📩 Message: ");
+  // Expected format: NODE01,some reply text
+  int firstComma = msg.indexOf(',');
+  if (firstComma > 0) {
+    String nodeID = msg.substring(0, firstComma);
+    String content = msg.substring(firstComma + 1);
+    Serial.print("📥 Response from ");
+    Serial.print(nodeID);
+    Serial.print(": ");
     Serial.println(content);
   } else {
-    Serial.println("⚠️ Malformed message from node.");
+    Serial.print("📥 Unknown message: ");
+    Serial.println(msg);
   }
 }
 
@@ -30,7 +34,7 @@ void setup() {
   WiFi.disconnect();
 
   if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW Init Failed");
+    Serial.println("❌ ESP-NOW Init Failed");
     return;
   }
 
@@ -39,17 +43,28 @@ void setup() {
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
   if (!esp_now_add_peer(&peerInfo)) {
-    Serial.println("Broadcast peer added.");
+    Serial.println("✅ Broadcast peer added.");
   }
 
-  esp_now_register_recv_cb(onReceive);  // ✅ Enable receiving from nodes
-
-  Serial.println("Gateway Ready.");
+  esp_now_register_recv_cb(onReceive);
+  Serial.println("✅ Gateway Ready. Type: NODE_ID,message");
 }
 
 void loop() {
-  String msg = String(gatewayID) + "," + "hello-node";
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)msg.c_str(), msg.length());
-  Serial.println(result == ESP_OK ? "✅ Sent hello-node!" : "❌ Send Failed");
-  delay(5000);  // ⏳ Every 5 seconds
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      inputBuffer.trim();
+      if (inputBuffer.length() > 0) {
+        String finalMessage = String(gatewayID) + "," + inputBuffer;
+        esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)finalMessage.c_str(), finalMessage.length());
+        Serial.print("📤 Sending: ");
+        Serial.println(finalMessage);
+        Serial.println(result == ESP_OK ? "✅ Sent!" : "❌ Send Failed");
+      }
+      inputBuffer = "";
+    } else {
+      inputBuffer += c;
+    }
+  }
 }
