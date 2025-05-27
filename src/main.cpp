@@ -2,6 +2,7 @@
 #include <esp_now.h>
 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+const char* gatewayID = "GW01";  // ✅ Unique Gateway ID
 
 void setup() {
   Serial.begin(115200);
@@ -25,8 +26,8 @@ void setup() {
 }
 
 void loop() {
-  const char *msg = "Hello ESP-NOW";
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)msg, strlen(msg));
+  String msg = String(gatewayID) + "," + "Hello ESP-NOW";  // 👈 Add gateway ID
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)msg.c_str(), msg.length());
   Serial.println(result == ESP_OK ? "✅ Sent!" : "❌ Send Failed");
   delay(3000);
 }
