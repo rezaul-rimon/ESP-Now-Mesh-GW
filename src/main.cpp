@@ -1,11 +1,43 @@
 // ✅ GATEWAY CODE (ESP-NOW CMD SENDER + ACK RECEIVER)
+#define TINY_GSM_MODEM_SIM7600
+#define TINY_GSM_USE_GPRS true
+#define TINY_GSM_USE_WIFI false
+
+#include <TinyGsmClient.h>
+#include <PubSubClient.h>
+#include <HardwareSerial.h>
+
 #include <WiFi.h>
 #include <esp_now.h>
 #include <deque>
 #include <algorithm>
 
-const char* gatewayID = "GW0";
+
+const char* DEVICE_ID = "GW0";
+char mqttSubTopic[64]; 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// GSM settings
+#define SerialAT Serial1
+#define MODEM_TX 17
+#define MODEM_RX 16
+#define MODEM_PWR 15
+#define SIM_BAUD 115200
+#define MQTT_PORT 1883
+#define MQTT_HB "DMA/EM/HB"
+#define MQTT_PUB "DMA/EM/PUB"
+#define MQTT_SUB "DMA/EM/SUB"
+
+const char apn[] = "blweb";
+const char user[] = "";
+const char pass[] = "";
+const char* broker = "broker2.dma-bd.com";
+const char* mqttUser = "broker2";
+const char* mqttPass = "Secret!@#$1234";
+
+TinyGsm modem(SerialAT);
+TinyGsmClient gsmClient(modem);
+PubSubClient mqtt(gsmClient);
 
 struct Message {
   String gw_id;
@@ -17,6 +49,51 @@ struct Message {
 
 std::deque<String> recentAckIDs;
 const size_t maxRecentIDs = 20;
+
+bool connectGSM() {
+  Serial.println("[GSM] Initializing modem...");
+  modem.restart();
+  delay(3000);
+  if (modem.getSimStatus() != SIM_READY) return false;
+  Serial.println("[GSM] Connecting to network...");
+  if (!modem.waitForNetwork()) return false;
+  if (!modem.gprsConnect(apn)) return false;
+  Serial.println("[GSM] Connected to GPRS!");
+  return true;
+}
+
+void reconnectMqtt() {
+  if (!mqtt.connected()) {
+    char clientId[32];
+    snprintf(clientId, sizeof(clientId), "sim7600_%04X", random(0xffff));
+    Serial.print("[MQTT] Connecting as client ID: ");
+    Serial.println(clientId);
+    if (mqtt.connect(clientId, mqttUser, mqttPass)) {
+      Serial.println("[MQTT] Connected");
+
+      // Prepare and subscribe to topic
+      snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_SUB, DEVICE_ID);
+      mqtt.subscribe(mqttSubTopic);
+      Serial.print("[MQTT] Subscribed to topic: ");
+      Serial.println(mqttSubTopic);
+    } else {
+      Serial.print("[MQTT] Failed, rc=");
+      Serial.println(mqtt.state());
+    }
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+  Serial.println("[MQTT IN] Topic: " + String(topic));
+  Serial.println("[MQTT IN] Message: " + message);
+
+  // You can add command handling here if needed
+}
 
 bool isDuplicateACK(const String& msg_id) {
   if (std::find(recentAckIDs.begin(), recentAckIDs.end(), msg_id) != recentAckIDs.end()) {
@@ -55,7 +132,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
     type    = msg.substring(idx3 + 1, idx4);
     msg_id  = msg.substring(idx4 + 1);
 
-    if (type != "ack" || gw_id != gatewayID) return;
+    if (type != "ack" || gw_id != DEVICE_ID) return;
   } else if (commaCount == 3) {
     int idx1 = msg.indexOf(',');
     int idx2 = msg.indexOf(',', idx1 + 1);
@@ -79,6 +156,19 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
 
 void setup() {
   Serial.begin(115200);
+
+  SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
+  pinMode(MODEM_PWR, OUTPUT);
+  digitalWrite(MODEM_PWR, HIGH);
+
+  for (int i = 0; i < 5 && !connectGSM(); i++) {
+    Serial.println("[GSM] Retry connecting...");
+    delay(5000);
+  }
+
+  mqtt.setServer(broker, MQTT_PORT);
+  mqtt.setCallback(mqttCallback);
+
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
@@ -98,6 +188,11 @@ void setup() {
 }
 
 void loop() {
+  mqtt.loop();
+
+  if (!modem.isGprsConnected()) connectGSM();
+  if (!mqtt.connected()) reconnectMqtt();
+
   if (Serial.available()) {
     String input = Serial.readStringUntil('\n');
     input.trim();           // Removes leading/trailing whitespace
@@ -111,7 +206,7 @@ void loop() {
     }
 
     Message msg;
-    msg.gw_id = gatewayID;
+    msg.gw_id = DEVICE_ID;
     msg.node_id = input.substring(0, commaIndex);
     msg.command = input.substring(commaIndex + 1);
     msg.type = "cmd";
