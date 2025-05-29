@@ -1,24 +1,40 @@
 // ✅ GATEWAY CODE (ESP-NOW CMD SENDER + ACK RECEIVER)
+
+// This code is designed to run on an ESP32 device with a SIM7600 GSM module.
 #define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 
+//Libraries required for GSM, MQTT, and ESP-NOW functionality
+#include <Arduino.h>
 #include <TinyGsmClient.h>
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
-
 #include <WiFi.h>
 #include <esp_now.h>
 #include <deque>
 #include <algorithm>
+#include <freertos/FreeRTOS.h>
 
+//Function prototypes
+void networkTask(void *param); 
+void mainTask(void *param);
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+bool connectGSM();
+void reconnectMqtt();
+void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
 
-
+//Gateway configuration
 const char* DEVICE_ID = "1191032505290001";
 const char* Local_ID = "GW0"; // Gateway ID
-char mqttSubTopic[64]; 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+
+//FreeRTOS Task instance
+TaskHandle_t networkTaskHandle;
+TaskHandle_t mainTaskHandle;
+// TaskHandle_t wifiResetTaskHandle;
 
 // GSM settings
 #define SerialAT Serial1
@@ -26,10 +42,6 @@ uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 #define MODEM_RX 16
 #define MODEM_PWR 15
 #define SIM_BAUD 115200
-#define MQTT_PORT 1883
-#define MQTT_HB "DMA/EM/HB"
-#define MQTT_PUB "DMA/EM/PUB"
-#define MQTT_SUB "DMA/EM/SUB"
 
 const char apn[] = "blweb";
 const char user[] = "";
@@ -38,10 +50,19 @@ const char* broker = "broker2.dma-bd.com";
 const char* mqttUser = "broker2";
 const char* mqttPass = "Secret!@#$1234";
 
+// MQTT settings
+char mqttSubTopic[64]; 
+#define MQTT_PORT 1883
+#define MQTT_HB "DMA/EM/HB"
+#define MQTT_PUB "DMA/EM/PUB"
+#define MQTT_SUB "DMA/EM/SUB"
+
+//Objects for GSM, MQTT, and ESP-NOW
 TinyGsm modem(SerialAT);
 TinyGsmClient gsmClient(modem);
 PubSubClient mqtt(gsmClient);
 
+//Struct to hold message data
 struct Message {
   String gw_id;
   String node_id;
@@ -50,13 +71,16 @@ struct Message {
   String msg_id;
 };
 
+//Queue to hold recent ACK IDs
 std::deque<String> recentAckIDs;
 const size_t maxRecentIDs = 20;
 
+// Function to connect to GSM network
 bool connectGSM() {
   Serial.println("[GSM] Initializing modem...");
   modem.restart();
-  delay(3000);
+  vTaskDelay(pdMS_TO_TICKS(3000)); // Adjust delay as needed
+  
   if (modem.getSimStatus() != SIM_READY) return false;
   Serial.println("[GSM] Connecting to network...");
   if (!modem.waitForNetwork()) return false;
@@ -65,6 +89,7 @@ bool connectGSM() {
   return true;
 }
 
+// Function to reconnect to MQTT broker
 void reconnectMqtt() {
   if (!mqtt.connected()) {
     char clientId[32];
@@ -86,6 +111,7 @@ void reconnectMqtt() {
   }
 }
 
+// Callback function for MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String message;
   for (unsigned int i = 0; i < length; i++) {
@@ -119,6 +145,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // You can add command handling here if needed
 }
 
+// Function to check for duplicate ACKs
 bool isDuplicateACK(const String& msg_id) {
   if (std::find(recentAckIDs.begin(), recentAckIDs.end(), msg_id) != recentAckIDs.end()) {
     return true;
@@ -130,13 +157,15 @@ bool isDuplicateACK(const String& msg_id) {
   return false;
 }
 
+// Function to generate a unique message ID
 String generateMessageID() {
   uint32_t randNum = esp_random();
-  char id[9];
-  sprintf(id, "%08X", randNum);
+  char id[5];
+  sprintf(id, "%04X", randNum);
   return String(id);
 }
 
+// Callback function for ESP-NOW messages
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   String msg((char*)incomingData, len);
   Serial.println("\n📥 Received: " + msg);
@@ -178,6 +207,49 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   Serial.printf("✅ ACK Received: node=%s cmd=%s id=%s\n", node_id.c_str(), command.c_str(), msg_id.c_str());
 }
 
+
+// Task to handle network operations (GSM and MQTT)
+void networkTask(void *param) {
+  for (;;) {
+    mqtt.loop();
+    if (!modem.isGprsConnected()) connectGSM();
+    if (!mqtt.connected()) reconnectMqtt();
+    vTaskDelay(pdMS_TO_TICKS(10)); // Adjust delay as needed
+  }
+}
+
+// Main task to handle user input and send commands
+void mainTask(void *param) {
+  for (;;) {
+
+    if (Serial.available()) {
+      String input = Serial.readStringUntil('\n');
+      input.trim();           // Removes leading/trailing whitespace
+      input.replace(" ", ""); // Removes all internal spaces
+      Serial.println("📥 Input: " + input);
+
+      int commaIndex = input.indexOf(',');
+      if (commaIndex < 0) {
+        Serial.println("⚠️ Format: node_id,command");
+        return;
+      }
+
+      Message msg;
+      msg.gw_id = Local_ID;
+      msg.node_id = input.substring(0, commaIndex);
+      msg.command = input.substring(commaIndex + 1);
+      msg.type = "cmd";
+      msg.msg_id = generateMessageID();
+
+      String payload = msg.gw_id + "," + msg.node_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
+      esp_now_send(broadcastAddress, (uint8_t*)payload.c_str(), payload.length());
+      Serial.println("📤 CMD Sent: " + payload);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10)); // Adjust delay as needed
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -209,35 +281,12 @@ void setup() {
   esp_now_register_recv_cb(onReceive);
 
   Serial.println("✅ Gateway Ready. Enter node_id,command to send:");
+
+  xTaskCreatePinnedToCore(networkTask, "Network Task", 8*1024, NULL, 1, &networkTaskHandle, 0);
+  xTaskCreatePinnedToCore(mainTask, "Main Task", 16*1024, NULL, 1, &mainTaskHandle, 1);
+  // xTaskCreatePinnedToCore(wifiResetTask, "WiFi Reset Task", 4*1024, NULL, 1, &wifiResetTaskHandle, 1);
 }
 
 void loop() {
-  mqtt.loop();
-
-  if (!modem.isGprsConnected()) connectGSM();
-  if (!mqtt.connected()) reconnectMqtt();
-
-  if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    input.trim();           // Removes leading/trailing whitespace
-    input.replace(" ", ""); // Removes all internal spaces
-    Serial.println("📥 Input: " + input);
-
-    int commaIndex = input.indexOf(',');
-    if (commaIndex < 0) {
-      Serial.println("⚠️ Format: node_id,command");
-      return;
-    }
-
-    Message msg;
-    msg.gw_id = Local_ID;
-    msg.node_id = input.substring(0, commaIndex);
-    msg.command = input.substring(commaIndex + 1);
-    msg.type = "cmd";
-    msg.msg_id = generateMessageID();
-
-    String payload = msg.gw_id + "," + msg.node_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
-    esp_now_send(broadcastAddress, (uint8_t*)payload.c_str(), payload.length());
-    Serial.println("📤 CMD Sent: " + payload);
-  }
+  
 }
