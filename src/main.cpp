@@ -100,7 +100,9 @@ void setup() {
 void loop() {
   if (Serial.available()) {
     String input = Serial.readStringUntil('\n');
-    input.trim();
+    input.trim();           // Removes leading/trailing whitespace
+    input.replace(" ", ""); // Removes all internal spaces
+    Serial.println("📥 Input: " + input);
 
     int commaIndex = input.indexOf(',');
     if (commaIndex < 0) {
