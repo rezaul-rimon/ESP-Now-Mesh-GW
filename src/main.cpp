@@ -12,8 +12,11 @@
 #include <deque>
 #include <algorithm>
 
+String generateMessageID();
 
-const char* DEVICE_ID = "GW0";
+
+const char* DEVICE_ID = "1191032505290001";
+const char* Local_ID = "GW0"; // Gateway ID
 char mqttSubTopic[64]; 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -92,6 +95,27 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println("[MQTT IN] Topic: " + String(topic));
   Serial.println("[MQTT IN] Message: " + message);
 
+  message.trim();           // Removes leading/trailing whitespace
+  message.replace(" ", ""); // Removes all internal spaces
+  Serial.println("📥 Message: " + message);
+
+  int commaIndex = message.indexOf(',');
+  if (commaIndex < 0) {
+    Serial.println("⚠️ Format: node_id,command");
+    return;
+  }
+
+  Message msg;
+  msg.gw_id = Local_ID;
+  msg.node_id = message.substring(0, commaIndex);
+  msg.command = message.substring(commaIndex + 1);
+  msg.type = "cmd";
+  msg.msg_id = generateMessageID();
+
+  String payload2 = msg.gw_id + "," + msg.node_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
+  esp_now_send(broadcastAddress, (uint8_t*)payload2.c_str(), payload2.length());
+  Serial.println("📤 CMD Sent: " + payload2);
+
   // You can add command handling here if needed
 }
 
@@ -132,7 +156,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
     type    = msg.substring(idx3 + 1, idx4);
     msg_id  = msg.substring(idx4 + 1);
 
-    if (type != "ack" || gw_id != DEVICE_ID) return;
+    if (type != "ack" || gw_id != Local_ID) return;
   } else if (commaCount == 3) {
     int idx1 = msg.indexOf(',');
     int idx2 = msg.indexOf(',', idx1 + 1);
@@ -206,7 +230,7 @@ void loop() {
     }
 
     Message msg;
-    msg.gw_id = DEVICE_ID;
+    msg.gw_id = Local_ID;
     msg.node_id = input.substring(0, commaIndex);
     msg.command = input.substring(commaIndex + 1);
     msg.type = "cmd";
