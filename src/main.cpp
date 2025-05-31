@@ -16,15 +16,17 @@
 #include <deque>
 #include <algorithm>
 #include <freertos/FreeRTOS.h>
+#include <FastLED.h>
 
-// #include <semphr.h>   // For FreeRTOS semaphore (optional on some platforms)
-
+#define LED_PIN 4
+#define NUM_LEDS 1
+CRGB leds[NUM_LEDS];
 
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 60000; //
+const unsigned long dataPublishInterval = 5 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
-const unsigned long hbPublishInterval = 30000; // 60 seconds
+const unsigned long hbPublishInterval = 1 * 60 * 1000;
 
 //Function prototypes
 void networkTask(void *param); 
@@ -136,6 +138,8 @@ bool connectGSM() {
 // Function to reconnect to MQTT broker
 void reconnectMqtt() {
   if (!mqtt.connected() && gsmConnected) {
+    leds[0]=CRGB::Orange; 
+    FastLED.show();
     char clientId[32];
     snprintf(clientId, sizeof(clientId), "sim7600_%04X", random(0xffff));
     Serial.print("[MQTT] Connecting as client ID: ");
@@ -143,6 +147,8 @@ void reconnectMqtt() {
 
     if (mqtt.connect(clientId, mqttUser, mqttPass)) {
       Serial.println("[MQTT] Connected");
+      leds[0]=CRGB::Black; 
+      FastLED.show();
       snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_SUB, DEVICE_ID);
       mqtt.subscribe(mqttSubTopic);
       Serial.print("[MQTT] Subscribed to topic: ");
@@ -156,6 +162,12 @@ void reconnectMqtt() {
 
 // Callback function for MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  leds[0]=CRGB::Blue; 
+  FastLED.show();
+  vTaskDelay(pdMS_TO_TICKS(100));
+  leds[0]=CRGB::Black;
+  FastLED.show();
+
   String message;
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
@@ -171,6 +183,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   int commaIndex = message.indexOf(',');
   if (commaIndex < 0) {
     Serial.println("⚠️ Format: node_id,command");
+    leds[0]=CRGB::Orange; 
+    FastLED.show();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    leds[0]=CRGB::Black;
+    FastLED.show();
     return;
   }
 
@@ -320,9 +337,15 @@ void getModbusData(){
 void powerCycleGSM() {
   Serial.println("🔁 Power cycling GSM module...");
   digitalWrite(MODEM_PWR, LOW);   // Turn off GSM
+  leds[0]=CRGB::Red; 
+  FastLED.show();
   delay(2000);                    // Wait 2 seconds
   digitalWrite(MODEM_PWR, HIGH);  // Turn on GSM
-  delay(3000);                    // Wait 3 seconds for boot
+  leds[0]=CRGB::Orange; 
+  FastLED.show();
+  delay(3000);
+  leds[0]=CRGB::Black; 
+  FastLED.show();                    // Wait 3 seconds for boot
 }
 
 void networkTask(void *param) {
@@ -337,6 +360,8 @@ void networkTask(void *param) {
       switch (gsmState) {
         case GSM_INIT:
           Serial.println("[GSM] Restarting modem...");
+          leds[0]=CRGB::Red; 
+          FastLED.show();
           modem.restart();
           delay(2000);
           gsmState = GSM_CONNECTING;
@@ -383,7 +408,7 @@ void networkTask(void *param) {
 
       xSemaphoreGive(modemMutex);
     } else {
-      Serial.println("⚠️ Could not acquire modem mutex");
+      Serial.println("⚠️ Could not acquire modem mutex, from networkTask");
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -421,9 +446,14 @@ void mainTask(void *param) {
       lastHBPublishTime = millis();
 
       if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
-        
+
         if(mqtt.publish(MQTT_HB, "💓 Heartbeat from Gateway")) {
           Serial.println("[MQTT] Heartbeat sent");
+          leds[0]=CRGB::Blue; 
+          FastLED.show();
+          vTaskDelay(pdMS_TO_TICKS(500));
+          leds[0]=CRGB::Black; 
+          FastLED.show();
         } else {
           Serial.println("[MQTT] Failed to send heartbeat");
         }
@@ -445,6 +475,11 @@ void mainTask(void *param) {
 
         if(mqtt.publish(MQTT_PUB, em_data)) {
           Serial.println("[MQTT] Data sent: " + String(em_data));
+          leds[0]=CRGB::Green; 
+          FastLED.show();
+          vTaskDelay(pdMS_TO_TICKS(1000));
+          leds[0]=CRGB::Black; 
+          FastLED.show();
         } else {
           Serial.println("[MQTT] Failed to send data");
         }
@@ -462,6 +497,22 @@ void mainTask(void *param) {
 
 void setup() {
   Serial.begin(115200);
+  FastLED.addLeds<NEOPIXEL,LED_PIN>(leds,NUM_LEDS);
+  
+  leds[0]=CRGB::Red; 
+  FastLED.show();
+  delay(250);
+  leds[0]=CRGB::Yellow;
+  FastLED.show();
+  delay(250);
+  leds[0]=CRGB::Blue;
+  FastLED.show();
+  delay(250);
+  leds[0]=CRGB::Black;
+  FastLED.show();
+  Serial.println("🔄 Starting Gateway...");
+
+
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);
   digitalWrite(MODEM_PWR, HIGH);
