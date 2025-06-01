@@ -18,15 +18,21 @@
 #include <freertos/FreeRTOS.h>
 #include <FastLED.h>
 
+//FastLED library for controlling LEDs
 #define LED_PIN 4
 #define NUM_LEDS 1
 CRGB leds[NUM_LEDS];
+#define AC_LINE_PIN 34
 
+//Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
 const unsigned long dataPublishInterval = 5 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
-const unsigned long hbPublishInterval = 1 * 60 * 1000;
+const unsigned long hbPublishInterval = 2 * 60 * 1000;
+
+unsigned long lastHourCheck = 0;
+bool snapshotSentThisHour = false;
 
 //Function prototypes
 void networkTask(void *param); 
@@ -38,12 +44,13 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032505290001";
-const char* Local_ID = "GW0"; // Gateway ID
+const char* DEVICE_ID = "1191032506010001";
+const char* Local_ID = "gw1"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 
-//FreeRTOS Task instance
+//FreeRTOS Tasks and instance
+QueueHandle_t mqttQueue;
 SemaphoreHandle_t modemMutex;
 TaskHandle_t networkTaskHandle;
 TaskHandle_t mainTaskHandle;
@@ -68,9 +75,13 @@ bool gsmConnected = false;
 // MQTT settings
 char mqttSubTopic[64]; 
 #define MQTT_PORT 1883
-#define MQTT_HB "DMA/EM/HB"
-#define MQTT_PUB "DMA/EM/PUB"
-#define MQTT_SUB "DMA/EM/SUB"
+#define MQTT_EM_HB "DMA/EnergyMeter/HB"
+#define MQTT_EM_PUB "DMA/EnergyMeter/PUB"
+#define MQTT_AC_HB "DMA/AC/HB"
+#define MQTT_AC_PUB "DMA/AC/PUB"
+#define MQTT_AC_SUB "DMA/AC/SUB"
+#define MQTT_AC_ACK "DMA/AC/ACK"
+// #define MQTT_CMD "DMA/AC/CMD"
 
 //Objects for GSM, MQTT, and ESP-NOW
 TinyGsm modem(SerialAT);
@@ -109,6 +120,14 @@ char em_data[128];
 ModbusMaster node;
 
 //Struct to hold message data
+#define MAX_MQTT_MSG_LEN 128
+#define MAX_TOPIC_LEN    64
+
+typedef struct {
+  char topic[MAX_TOPIC_LEN];
+  char payload[MAX_MQTT_MSG_LEN];
+} MqttMessage;
+
 struct Message {
   String gw_id;
   String node_id;
@@ -141,7 +160,7 @@ void reconnectMqtt() {
     leds[0]=CRGB::Orange; 
     FastLED.show();
     char clientId[32];
-    snprintf(clientId, sizeof(clientId), "sim7600_%04X", random(0xffff));
+    snprintf(clientId, sizeof(clientId), "ac_gsm_%04X%04X", random(0xffff), random(0xffff));
     Serial.print("[MQTT] Connecting as client ID: ");
     Serial.println(clientId);
 
@@ -149,7 +168,7 @@ void reconnectMqtt() {
       Serial.println("[MQTT] Connected");
       leds[0]=CRGB::Black; 
       FastLED.show();
-      snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_SUB, DEVICE_ID);
+      snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_AC_SUB, DEVICE_ID);
       mqtt.subscribe(mqttSubTopic);
       Serial.print("[MQTT] Subscribed to topic: ");
       Serial.println(mqttSubTopic);
@@ -236,7 +255,6 @@ void ParsingModbusData() {
     frequency, powerFactor);
 }
 
-
 // Function to check for duplicate ACKs
 bool isDuplicateACK(const String& msg_id) {
   if (std::find(recentAckIDs.begin(), recentAckIDs.end(), msg_id) != recentAckIDs.end()) {
@@ -257,7 +275,7 @@ String generateMessageID() {
   return String(id);
 }
 
-// Callback function for ESP-NOW messages
+//Callback function for ESP-NOW messages
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   String msg((char*)incomingData, len);
   Serial.println("\n📥 Received: " + msg);
@@ -277,28 +295,47 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
     type    = msg.substring(idx3 + 1, idx4);
     msg_id  = msg.substring(idx4 + 1);
 
-    if (type != "ack" || gw_id != Local_ID) return;
-  } else if (commaCount == 3) {
-    int idx1 = msg.indexOf(',');
-    int idx2 = msg.indexOf(',', idx1 + 1);
-    int idx3 = msg.indexOf(',', idx2 + 1);
+    if (type != "ack" && type != "hb") return;
 
-    node_id = msg.substring(0, idx1);
-    command = msg.substring(idx1 + 1, idx2);
-    type    = msg.substring(idx2 + 1, idx3);
-    msg_id  = msg.substring(idx3 + 1);
+    } else if (commaCount == 3) {
+      int idx1 = msg.indexOf(',');
+      int idx2 = msg.indexOf(',', idx1 + 1);
+      int idx3 = msg.indexOf(',', idx2 + 1);
 
-    if (type != "ack") return;
-  } else return;
+      node_id = msg.substring(0, idx1);
+      command = msg.substring(idx1 + 1, idx2);
+      type    = msg.substring(idx2 + 1, idx3);
+      msg_id  = msg.substring(idx3 + 1);
 
-  if (isDuplicateACK(msg_id)) {
-    Serial.println("⚠️ Duplicate ACK ignored");
-    return;
-  }
+      if (type != "ack" && type != "hb") return;
 
-  Serial.printf("✅ ACK Received: node=%s cmd=%s id=%s\n", node_id.c_str(), command.c_str(), msg_id.c_str());
+    } else return;
+
+    // ✅ Deduplication
+    if (isDuplicateACK(msg_id)) {
+      Serial.println("⚠️ Duplicate " + type + " ignored");
+      return;
+    }
+
+    // ✅ Print parsed data
+    Serial.printf("✅ %s Received: node=%s cmd=%s id=%s\n", type.c_str(), node_id.c_str(), command.c_str(), msg_id.c_str());
+
+    // ✅ Push to MQTT queue
+    MqttMessage mqttMsg;
+
+    if (type == "ack") {
+      snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);  // your predefined topic
+      snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
+
+    } else if (type == "hb") {
+      snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB); // you define this topic
+      snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
+    }
+
+    xQueueSend(mqttQueue, &mqttMsg, 0);
 }
 
+// Function to initialize Modbus communication
 void getModbusData(){
   taeHigh     = readModbusData(taeHigh_reg_addr, 3);
   taeLow      = readModbusData(taeLow_reg_addr, 3);
@@ -348,6 +385,7 @@ void powerCycleGSM() {
   FastLED.show();                    // Wait 3 seconds for boot
 }
 
+// Setup function to initialize everything
 void networkTask(void *param) {
   enum GsmState { GSM_INIT, GSM_CONNECTING, GSM_CONNECTED, GSM_ERROR };
   GsmState gsmState = GSM_INIT;
@@ -415,9 +453,10 @@ void networkTask(void *param) {
   }
 }
 
-// Main task to handle user input and send commands
+// Main task to handle serial commands, heartbeat, and Modbus data
 void mainTask(void *param) {
   for (;;) {
+    // 📥 Serial command handler
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n');
       input.trim(); input.replace(" ", "");
@@ -440,61 +479,100 @@ void mainTask(void *param) {
       }
     }
 
-
-    // Heartbeat publish
+    // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {
-      lastHBPublishTime = millis();
+    lastHBPublishTime = millis();
+    bool acLineState = digitalRead(AC_LINE_PIN);
 
-      if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
+    MqttMessage hbMsg;
+    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_EM_PUB);
+    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:1,G:0,C:%d,SD:0", DEVICE_ID, acLineState ? 1 : 0);
 
-        if(mqtt.publish(MQTT_HB, "💓 Heartbeat from Gateway")) {
-          Serial.println("[MQTT] Heartbeat sent");
-          leds[0]=CRGB::Blue; 
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(500));
-          leds[0]=CRGB::Black; 
-          FastLED.show();
-        } else {
-          Serial.println("[MQTT] Failed to send heartbeat");
-        }
+    xQueueSend(mqttQueue, &hbMsg, 0);
+  }
 
-        xSemaphoreGive(modemMutex);
-      } else {
-        Serial.println("⚠️ Could not acquire modem mutex to send heartbeat");
-      }
-    }
-
-    // Modbus Data publish
+    // 📊 Modbus Data via MQTT queue
     if (millis() - lastDataPublishTime >= dataPublishInterval) {
       lastDataPublishTime = millis();
 
-      getModbusData(); // Read Modbus data
-      ParsingModbusData(); // Prepare data string
+      getModbusData();         // Populate raw data
+      ParsingModbusData();     // Format to em_data
+
       Serial.println("📤 Publishing Modbus Data....");
-      if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
 
-        if(mqtt.publish(MQTT_PUB, em_data)) {
-          Serial.println("[MQTT] Data sent: " + String(em_data));
-          leds[0]=CRGB::Green; 
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(1000));
-          leds[0]=CRGB::Black; 
-          FastLED.show();
-        } else {
-          Serial.println("[MQTT] Failed to send data");
-        }
+      MqttMessage dataMsg;
+      snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_EM_PUB);
+      snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s", em_data);
 
-        xSemaphoreGive(modemMutex);
-      } else {
-        Serial.println("⚠️ Could not acquire modem mutex to send heartbeat");
-      }
+      xQueueSend(mqttQueue, &dataMsg, 0);
     }
 
-    vTaskDelay(pdMS_TO_TICKS(100)); // Prevent WDT
+    // 📅 Hourly snapshot
+    // unsigned long now = millis();
+    // // Hourly snapshot logic
+    // if (now - lastHourCheck >= 60 * 1000) {  // Check every 1 min
+    //   lastHourCheck = now;
+
+    //   if (isTopOfHour()) {
+    //     if (!snapshotSentThisHour) {
+    //       snapshotSentThisHour = true;
+
+    //       getModbusData();         // Populate raw data
+    //       ParsingModbusData();     // Format to em_data
+
+    //       // Send hourly snapshot
+    //       String snapshotData = "📸 Hourly Snapshot at top of hour";
+    //       if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
+    //         mqtt.publish("iot/hourly", snapshotData.c_str());
+    //         Serial.println("[MQTT] 📸 Hourly snapshot sent");
+    //         xSemaphoreGive(modemMutex);
+    //       } else {
+    //         Serial.println("⚠️ Could not acquire modem mutex for hourly snapshot");
+    //       }
+    //     }
+    //   } else {
+    //     snapshotSentThisHour = false;  // reset flag once out of top of hour
+    //   }
+    // }
+    
+    vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
 }
 
+void mqttPublishTask(void *param) {
+  MqttMessage msg;
 
+  for (;;) {
+    if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
+      if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
+        if (mqtt.publish(msg.topic, msg.payload)) {
+          Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
+
+          // 🔘 LED indication based on topic
+          if (String(msg.topic) == MQTT_EM_HB) {
+            leds[0] = CRGB::Blue;
+            FastLED.show();
+            vTaskDelay(pdMS_TO_TICKS(500));
+          } else if(msg.topic == MQTT_EM_PUB) {
+            leds[0] = CRGB::Green;
+            FastLED.show();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+          }
+          leds[0] = CRGB::Black;
+          FastLED.show();
+
+        } else {
+          Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
+        }
+        xSemaphoreGive(modemMutex);
+      } else {
+        Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");
+      }
+    }
+  }
+}
+
+// Function to check if it's the top of the hour
 void setup() {
   Serial.begin(115200);
   FastLED.addLeds<NEOPIXEL,LED_PIN>(leds,NUM_LEDS);
@@ -517,6 +595,8 @@ void setup() {
   pinMode(MODEM_PWR, OUTPUT);
   digitalWrite(MODEM_PWR, HIGH);
 
+  pinMode(AC_LINE_PIN, INPUT); // AC line detection pin
+
   mqtt.setServer(broker, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
 
@@ -538,6 +618,12 @@ void setup() {
   Serial2.begin(9600, SERIAL_8N1, RS485_RX, RS485_TX);
   node.begin(1, Serial2);
 
+  mqttQueue = xQueueCreate(10, sizeof(MqttMessage));
+  if (mqttQueue == NULL) {
+    Serial.println("❌ Failed to create mqttQueue");
+    while (1); // Stop here if failed
+  }
+
   modemMutex = xSemaphoreCreateMutex();
   if (modemMutex == NULL) {
     Serial.println("❌ Failed to create modemMutex");
@@ -548,8 +634,11 @@ void setup() {
 
   xTaskCreatePinnedToCore(networkTask, "Network Task", 8 * 1024, NULL, 1, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(mainTask, "Main Task", 16 * 1024, NULL, 1, &mainTaskHandle, 1);
+  xTaskCreatePinnedToCore(mqttPublishTask, "MQTT Pub Task", 6 * 1024, NULL, 1, NULL, 1);
+
 }
 
+// Function to check if it's the top of the hour
 void loop() {
   
 }
