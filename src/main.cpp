@@ -1,38 +1,5 @@
 // ✅ GATEWAY CODE (ESP-NOW CMD SENDER + ACK RECEIVER)
-
-// This code is designed to run on an ESP32 device with a SIM7600 GSM module.
-#define TINY_GSM_MODEM_SIM7600
-#define TINY_GSM_USE_GPRS true
-#define TINY_GSM_USE_WIFI false
-
-//Libraries required for GSM, MQTT, and ESP-NOW functionality
-#include <Arduino.h>
-#include <TinyGsmClient.h>
-#include <PubSubClient.h>
-#include <HardwareSerial.h>
-#include <ModbusMaster.h>
-#include <WiFi.h>
-#include <esp_now.h>
-#include <deque>
-#include <algorithm>
-#include <freertos/FreeRTOS.h>
-#include <FastLED.h>
-
-//FastLED library for controlling LEDs
-#define LED_PIN 4
-#define NUM_LEDS 1
-CRGB leds[NUM_LEDS];
-#define AC_LINE_PIN 34
-
-//Timers for publishing data and heartbeat
-unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 5 * 60 * 1000;
-
-unsigned long lastHBPublishTime = 0;
-const unsigned long hbPublishInterval = 2 * 60 * 1000;
-
-unsigned long lastHourCheck = 0;
-bool snapshotSentThisHour = false;
+#include <config.h>
 
 //Function prototypes
 void networkTask(void *param); 
@@ -43,11 +10,10 @@ void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
 
-//Gateway configuration
-const char* DEVICE_ID = "1191032506010001";
-const char* Local_ID = "gw1"; // Gateway ID
-uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-
+//Objects for GSM, MQTT, and ESP-NOW
+TinyGsm modem(SerialAT);
+TinyGsmClient gsmClient(modem);
+PubSubClient mqtt(gsmClient);
 
 //FreeRTOS Tasks and instance
 QueueHandle_t mqttQueue;
@@ -55,90 +21,6 @@ SemaphoreHandle_t modemMutex;
 TaskHandle_t networkTaskHandle;
 TaskHandle_t mainTaskHandle;
 // TaskHandle_t wifiResetTaskHandle;
-
-// GSM settings
-#define SerialAT Serial1
-#define MODEM_TX 17
-#define MODEM_RX 16
-#define MODEM_PWR 15
-#define SIM_BAUD 115200
-
-const char apn[] = "blweb";
-const char user[] = "";
-const char pass[] = "";
-const char* broker = "broker2.dma-bd.com";
-const char* mqttUser = "broker2";
-const char* mqttPass = "Secret!@#$1234";
-
-bool gsmConnected = false;
-
-// MQTT settings
-char mqttSubTopic[64]; 
-#define MQTT_PORT 1883
-#define MQTT_EM_HB "DMA/EnergyMeter/HB"
-#define MQTT_EM_PUB "DMA/EnergyMeter/PUB"
-#define MQTT_AC_HB "DMA/AC/HB"
-#define MQTT_AC_PUB "DMA/AC/PUB"
-#define MQTT_AC_SUB "DMA/AC/SUB"
-#define MQTT_AC_ACK "DMA/AC/ACK"
-// #define MQTT_CMD "DMA/AC/CMD"
-
-//Objects for GSM, MQTT, and ESP-NOW
-TinyGsm modem(SerialAT);
-TinyGsmClient gsmClient(modem);
-PubSubClient mqtt(gsmClient);
-
-// RS485 Serial2 Pins
-#define RS485_RX 27
-#define RS485_TX 14
-
-
-// Modbus register addresses
-#define taeHigh_reg_addr     0x30
-#define taeLow_reg_addr      0x31
-#define activePower_reg_addr 0x1A
-#define pAvolt_reg_addr      0x14
-#define pBvolt_reg_addr      0x15
-#define pCvolt_reg_addr      0x16
-#define lABvolt_reg_addr     0x17
-#define lBCvolt_reg_addr     0x18
-#define lCAvolt_reg_addr     0x19
-#define pAcurrent_reg_addr   0x10
-#define pBcurrent_reg_addr   0x11
-#define pCcurrent_reg_addr   0x12
-#define frequency_reg_addr   0x1E
-#define powerfactor_reg_addr 0x1D
-
-// Data variables
-int taeHigh, taeLow, activePower;
-int pAvolt, pBvolt, pCvolt;
-int lABvolt, lBCvolt, lCAvolt;
-int pAcurrent, pBcurrent, pCcurrent;
-int frequency, powerFactor;
-
-char em_data[128];
-ModbusMaster node;
-
-//Struct to hold message data
-#define MAX_MQTT_MSG_LEN 128
-#define MAX_TOPIC_LEN    64
-
-typedef struct {
-  char topic[MAX_TOPIC_LEN];
-  char payload[MAX_MQTT_MSG_LEN];
-} MqttMessage;
-
-struct Message {
-  String gw_id;
-  String node_id;
-  String command;
-  String type;
-  String msg_id;
-};
-
-//Queue to hold recent ACK IDs
-std::deque<String> recentAckIDs;
-const size_t maxRecentIDs = 20;
 
 // Function to connect to GSM network
 bool connectGSM() {
@@ -224,37 +106,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // You can add command handling here if needed
 }
 
-// Function to read Modbus data from the RS485 slave
-int readModbusData(uint16_t reg_address, uint8_t max_retries) {
-  vTaskDelay(pdMS_TO_TICKS(30));
-  int value = -1;
-  while (max_retries-- > 0) {
-    uint8_t result = node.readHoldingRegisters(reg_address, 1);
-    if (result == node.ku8MBSuccess) {
-      value = node.getResponseBuffer(0);
-      Serial.print("Modbus Read 0x");
-      Serial.print(reg_address, HEX);
-      Serial.print(": ");
-      Serial.println(value);
-      break;
-    }
-    vTaskDelay(pdMS_TO_TICKS(60));
-  }
-  return value;
-}
-
-// Function to initialize Modbus communication
-void ParsingModbusData() {
-  snprintf(em_data, sizeof(em_data),
-    "%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-    DEVICE_ID,
-    taeHigh, taeLow, activePower,
-    pAvolt, pBvolt, pCvolt,
-    lABvolt, lBCvolt, lCAvolt,
-    pAcurrent, pBcurrent, pCcurrent,
-    frequency, powerFactor);
-}
-
 // Function to check for duplicate ACKs
 bool isDuplicateACK(const String& msg_id) {
   if (std::find(recentAckIDs.begin(), recentAckIDs.end(), msg_id) != recentAckIDs.end()) {
@@ -269,7 +120,7 @@ bool isDuplicateACK(const String& msg_id) {
 
 // Function to generate a unique message ID
 String generateMessageID() {
-  uint32_t randNum = esp_random();
+  uint16_t randNum = esp_random() & 0xFFFF;
   char id[5];
   sprintf(id, "%04X", randNum);
   return String(id);
@@ -295,7 +146,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
     type    = msg.substring(idx3 + 1, idx4);
     msg_id  = msg.substring(idx4 + 1);
 
-    if (type != "ack" && type != "hb") return;
+    if (type != "ack" && type != "hb" && type != "tmp") return;
 
     } else if (commaCount == 3) {
       int idx1 = msg.indexOf(',');
@@ -331,8 +182,31 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
       snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB); // you define this topic
       snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
     }
+    else if (type == "tmp") {
+      snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB); // you define this topic
+      snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
+    }
 
     xQueueSend(mqttQueue, &mqttMsg, 0);
+}
+
+// Function to read Modbus data from the RS485 slave
+int readModbusData(uint16_t reg_address, uint8_t max_retries) {
+  vTaskDelay(pdMS_TO_TICKS(30));
+  int value = -1;
+  while (max_retries-- > 0) {
+    uint8_t result = node.readHoldingRegisters(reg_address, 1);
+    if (result == node.ku8MBSuccess) {
+      value = node.getResponseBuffer(0);
+      Serial.print("Modbus Read 0x");
+      Serial.print(reg_address, HEX);
+      Serial.print(": ");
+      Serial.println(value);
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(60));
+  }
+  return value;
 }
 
 // Function to initialize Modbus communication
@@ -368,6 +242,38 @@ void getModbusData(){
   Serial.printf("Frequency: %d Hz\n", frequency);
   Serial.printf("Power Factor: %d\n", powerFactor);
   Serial.println("--------------------------------");
+}
+
+//Make ready for mqtt
+void ParsingModbusData() {
+  // Parse energy from Modbus (32-bit value = taeHigh << 16 | taeLow)
+  uint32_t totalEnergyRaw = ((uint32_t)taeHigh << 16) | (uint32_t)taeLow;
+  float totaltNetEnergy = totalEnergyRaw * 0.1;  // If energy is in 0.01 kWh units
+  float tImpEnergy = totalEnergyRaw * 0.1;       // Same value, different name if needed
+
+  // Scale all measurements
+  activePower *= 0.1;
+  pAvolt *= 0.1;
+  pBvolt *= 0.1;
+  pCvolt *= 0.1;
+  lABvolt *= 0.1;
+  lBCvolt *= 0.1;
+  lCAvolt *= 0.1;
+  pAcurrent *= 0.1;
+  pBcurrent *= 0.1;
+  pCcurrent *= 0.1;
+  frequency *= 0.01;
+  powerFactor *= 0.001;
+
+  // Format data with exactly two digits after decimal point
+  snprintf(em_data, sizeof(em_data),
+    "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
+    DEVICE_ID,
+    totaltNetEnergy, tImpEnergy, activePower,
+    pAvolt, pBvolt, pCvolt,
+    lABvolt, lBCvolt, lCAvolt,
+    pAcurrent, pBcurrent, pCcurrent,
+    frequency, powerFactor);
 }
 
 // Function to power cycle the GSM module
@@ -486,7 +392,10 @@ void mainTask(void *param) {
 
     MqttMessage hbMsg;
     snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_EM_PUB);
-    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:1,G:0,C:%d,SD:0", DEVICE_ID, acLineState ? 1 : 0);
+    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:0,G:1,C:%d,SD:%d",
+      DEVICE_ID,
+      acLineState ? 1 : 0,
+      USE_SD_CARD ? 1 : 0);
 
     xQueueSend(mqttQueue, &hbMsg, 0);
   }
@@ -506,39 +415,12 @@ void mainTask(void *param) {
 
       xQueueSend(mqttQueue, &dataMsg, 0);
     }
-
-    // 📅 Hourly snapshot
-    // unsigned long now = millis();
-    // // Hourly snapshot logic
-    // if (now - lastHourCheck >= 60 * 1000) {  // Check every 1 min
-    //   lastHourCheck = now;
-
-    //   if (isTopOfHour()) {
-    //     if (!snapshotSentThisHour) {
-    //       snapshotSentThisHour = true;
-
-    //       getModbusData();         // Populate raw data
-    //       ParsingModbusData();     // Format to em_data
-
-    //       // Send hourly snapshot
-    //       String snapshotData = "📸 Hourly Snapshot at top of hour";
-    //       if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
-    //         mqtt.publish("iot/hourly", snapshotData.c_str());
-    //         Serial.println("[MQTT] 📸 Hourly snapshot sent");
-    //         xSemaphoreGive(modemMutex);
-    //       } else {
-    //         Serial.println("⚠️ Could not acquire modem mutex for hourly snapshot");
-    //       }
-    //     }
-    //   } else {
-    //     snapshotSentThisHour = false;  // reset flag once out of top of hour
-    //   }
-    // }
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
 }
 
+//Data Publish Task
 void mqttPublishTask(void *param) {
   MqttMessage msg;
 
