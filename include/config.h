@@ -19,8 +19,8 @@
 #include <FastLED.h>
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032506010001";
-const char* Local_ID = "gw1"; // Gateway ID
+const char* DEVICE_ID = "1191032506010000";
+const char* Local_ID = "gw2"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat

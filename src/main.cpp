@@ -121,6 +121,8 @@ bool isDuplicateACK(const String& msg_id) {
 // Function to generate a unique message ID
 String generateMessageID() {
   uint16_t randNum = esp_random() & 0xFFFF;
+  // Serial.print("Raw 16-bit randNum: ");
+  // Serial.println(randNum);
   char id[5];
   sprintf(id, "%04X", randNum);
   return String(id);
@@ -245,35 +247,76 @@ void getModbusData(){
 }
 
 //Make ready for mqtt
+// void ParsingModbusData() {
+//   // Parse energy from Modbus (32-bit value = taeHigh << 16 | taeLow)
+//   uint32_t totalEnergyRaw = ((uint32_t)taeHigh << 16) | (uint32_t)taeLow;
+//   float totaltNetEnergy = totalEnergyRaw * 0.1;  // If energy is in 0.01 kWh units
+//   float tImpEnergy = totalEnergyRaw * 0.1;       // Same value, different name if needed
+
+//   // Scale all measurements
+//   activePower *= 0.1;
+//   pAvolt *= 0.1;
+//   pBvolt *= 0.1;
+//   pCvolt *= 0.1;
+//   lABvolt *= 0.1;
+//   lBCvolt *= 0.1;
+//   lCAvolt *= 0.1;
+//   pAcurrent *= 0.1;
+//   pBcurrent *= 0.1;
+//   pCcurrent *= 0.1;
+//   frequency *= 0.01;
+//   powerFactor *= 0.001;
+
+//   // Format data with exactly two digits after decimal point
+//   snprintf(em_data, sizeof(em_data),
+//     "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
+//     DEVICE_ID,
+//     totaltNetEnergy, tImpEnergy, activePower,
+//     pAvolt, pBvolt, pCvolt,
+//     lABvolt, lBCvolt, lCAvolt,
+//     pAcurrent, pBcurrent, pCcurrent,
+//     frequency, powerFactor);
+// }
+
+// Function to parse Modbus data and prepare MQTT message
 void ParsingModbusData() {
-  // Parse energy from Modbus (32-bit value = taeHigh << 16 | taeLow)
+  // Combine 32-bit energy register from taeHigh and taeLow
   uint32_t totalEnergyRaw = ((uint32_t)taeHigh << 16) | (uint32_t)taeLow;
-  float totaltNetEnergy = totalEnergyRaw * 0.1;  // If energy is in 0.01 kWh units
-  float tImpEnergy = totalEnergyRaw * 0.1;       // Same value, different name if needed
 
-  // Scale all measurements
-  activePower *= 0.1;
-  pAvolt *= 0.1;
-  pBvolt *= 0.1;
-  pCvolt *= 0.1;
-  lABvolt *= 0.1;
-  lBCvolt *= 0.1;
-  lCAvolt *= 0.1;
-  pAcurrent *= 0.1;
-  pBcurrent *= 0.1;
-  pCcurrent *= 0.1;
-  frequency *= 0.01;
-  powerFactor *= 0.001;
+  // Scale energy — assuming it's in 0.1 kWh units
+  float totaltNetEnergy = totalEnergyRaw * 0.1;
+  float tImpEnergy = totalEnergyRaw * 0.1;
 
-  // Format data with exactly two digits after decimal point
+  // Apply proper scaling
+  float ap = activePower * 0.1;
+  float va = pAvolt * 0.1;
+  float vb = pBvolt * 0.1;
+  float vc = pCvolt * 0.1;
+  float vab = lABvolt * 0.1;
+  float vbc = lBCvolt * 0.1;
+  float vca = lCAvolt * 0.1;
+  float ia = pAcurrent * 0.1;
+  float ib = pBcurrent * 0.1;
+  float ic = pCcurrent * 0.1;
+  float freq = frequency * 0.01;
+  float pf = powerFactor * 0.001;
+
+  // Optional debug prints to verify scaling
+  Serial.println("---- Scaled Values ----");
+  Serial.printf("Energy: %.2f kWh, Power: %.2f W\n", totaltNetEnergy, ap);
+  Serial.printf("Voltages: VA=%.2f, VB=%.2f, VC=%.2f, VAB=%.2f, VBC=%.2f, VCA=%.2f\n", va, vb, vc, vab, vbc, vca);
+  Serial.printf("Currents: IA=%.2f, IB=%.2f, IC=%.2f\n", ia, ib, ic);
+  Serial.printf("Frequency: %.2f Hz, PF: %.3f\n", freq, pf);
+
+  // Format the final MQTT message string
   snprintf(em_data, sizeof(em_data),
-    "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
+    "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f",
     DEVICE_ID,
-    totaltNetEnergy, tImpEnergy, activePower,
-    pAvolt, pBvolt, pCvolt,
-    lABvolt, lBCvolt, lCAvolt,
-    pAcurrent, pBcurrent, pCcurrent,
-    frequency, powerFactor);
+    totaltNetEnergy, tImpEnergy, ap,
+    va, vb, vc,
+    vab, vbc, vca,
+    ia, ib, ic,
+    freq, pf);
 }
 
 // Function to power cycle the GSM module
@@ -391,7 +434,7 @@ void mainTask(void *param) {
     bool acLineState = digitalRead(AC_LINE_PIN);
 
     MqttMessage hbMsg;
-    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_EM_PUB);
+    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_EM_HB);
     snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:0,G:1,C:%d,SD:%d",
       DEVICE_ID,
       acLineState ? 1 : 0,
