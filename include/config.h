@@ -105,13 +105,17 @@ typedef struct {
 } MqttMessage;
 
 struct Message {
-    String gw_id;
-    String node_id;
+    String sender_id;
+    String receiver_id;
     String command;
     String type;
     String msg_id;
 };
 
 //Queue to hold recent ACK IDs
-std::deque<String> recentAckIDs;
+// std::deque<String> recentAckIDs;
+// const size_t maxRecentIDs = 20;
+
+// std::deque<String> recentMsgIDs;  // Global or static variable
+std::deque<String> recentMsgKeys;
 const size_t maxRecentIDs = 20;

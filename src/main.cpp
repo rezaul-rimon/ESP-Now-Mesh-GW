@@ -9,6 +9,7 @@ bool connectGSM();
 void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
+bool isDuplicate(const String& msg_id);
 
 //Objects for GSM, MQTT, and ESP-NOW
 TinyGsm modem(SerialAT);
@@ -93,13 +94,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 
   Message msg;
-  msg.gw_id = Local_ID;
-  msg.node_id = message.substring(0, commaIndex);
+  msg.sender_id = Local_ID;
+  msg.receiver_id = message.substring(0, commaIndex);
   msg.command = message.substring(commaIndex + 1);
   msg.type = "cmd";
   msg.msg_id = generateMessageID();
 
-  String payload2 = msg.gw_id + "," + msg.node_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
+  String payload2 = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
   esp_now_send(broadcastAddress, (uint8_t*)payload2.c_str(), payload2.length());
   Serial.println("📤 CMD Sent: " + payload2);
 
@@ -107,13 +108,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 // Function to check for duplicate ACKs
-bool isDuplicateACK(const String& msg_id) {
-  if (std::find(recentAckIDs.begin(), recentAckIDs.end(), msg_id) != recentAckIDs.end()) {
+bool isDuplicate(const String& type, const String& msg_id) {
+  String key = type + ":" + msg_id;
+  if (std::find(recentMsgKeys.begin(), recentMsgKeys.end(), key) != recentMsgKeys.end()) {
     return true;
   }
-  recentAckIDs.push_back(msg_id);
-  if (recentAckIDs.size() > maxRecentIDs) {
-    recentAckIDs.pop_front();
+  recentMsgKeys.push_back(key);
+  if (recentMsgKeys.size() > maxRecentIDs) {
+    recentMsgKeys.pop_front();
   }
   return false;
 }
@@ -128,69 +130,60 @@ String generateMessageID() {
   return String(id);
 }
 
-//Callback function for ESP-NOW messages
+
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   String msg((char*)incomingData, len);
   Serial.println("\n📥 Received: " + msg);
 
   int commaCount = std::count(msg.begin(), msg.end(), ',');
+  if (commaCount != 4) {
+    Serial.println("❌ Invalid message format. Skipped.");
+    return;
+  }
 
-  String node_id, command, type, msg_id, gw_id;
-  if (commaCount == 4) {
-    int idx1 = msg.indexOf(',');
-    int idx2 = msg.indexOf(',', idx1 + 1);
-    int idx3 = msg.indexOf(',', idx2 + 1);
-    int idx4 = msg.indexOf(',', idx3 + 1);
+  int idx1 = msg.indexOf(',');
+  int idx2 = msg.indexOf(',', idx1 + 1);
+  int idx3 = msg.indexOf(',', idx2 + 1);
+  int idx4 = msg.indexOf(',', idx3 + 1);
 
-    gw_id   = msg.substring(0, idx1);
-    node_id = msg.substring(idx1 + 1, idx2);
-    command = msg.substring(idx2 + 1, idx3);
-    type    = msg.substring(idx3 + 1, idx4);
-    msg_id  = msg.substring(idx4 + 1);
+  String sender_id   = msg.substring(0, idx1);
+  String receiver_id = msg.substring(idx1 + 1, idx2);
+  String command     = msg.substring(idx2 + 1, idx3);
+  String type        = msg.substring(idx3 + 1, idx4);
+  String msg_id      = msg.substring(idx4 + 1);
+  
+  // 🔁 Deduplication for ALL types
+  if (isDuplicate(type, msg_id)) {
+    Serial.println("⚠️ Duplicate " + type + " ignored (id=" + msg_id + ")");
+    return;
+  }
 
-    if (type != "ack" && type != "hb" && type != "tmp") return;
+  // Only process known types
+  if (type != "ack" && type != "hb" && type != "tmp") {
+    Serial.println("⏭ Ignored unknown type: " + type);
+    return;
+  }
 
-    } else if (commaCount == 3) {
-      int idx1 = msg.indexOf(',');
-      int idx2 = msg.indexOf(',', idx1 + 1);
-      int idx3 = msg.indexOf(',', idx2 + 1);
+  Serial.printf("✅ %s Received: sender=%s → receiver=%s | cmd=%s | id=%s\n",
+                type.c_str(), sender_id.c_str(), receiver_id.c_str(),
+                command.c_str(), msg_id.c_str());
 
-      node_id = msg.substring(0, idx1);
-      command = msg.substring(idx1 + 1, idx2);
-      type    = msg.substring(idx2 + 1, idx3);
-      msg_id  = msg.substring(idx3 + 1);
+  // Prepare MQTT message
+  MqttMessage mqttMsg;
+  if (type == "ack") {
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  } else if (type == "hb" || type == "tmp") {
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  }
 
-      if (type != "ack" && type != "hb") return;
+  xQueueSend(mqttQueue, &mqttMsg, 0);
 
-    } else return;
-
-    // ✅ Deduplication
-    if (isDuplicateACK(msg_id)) {
-      Serial.println("⚠️ Duplicate " + type + " ignored");
-      return;
-    }
-
-    // ✅ Print parsed data
-    Serial.printf("✅ %s Received: node=%s cmd=%s id=%s\n", type.c_str(), node_id.c_str(), command.c_str(), msg_id.c_str());
-
-    // ✅ Push to MQTT queue
-    MqttMessage mqttMsg;
-
-    if (type == "ack") {
-      snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);  // your predefined topic
-      snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
-
-    } else if (type == "hb") {
-      snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB); // you define this topic
-      snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
-    }
-    else if (type == "tmp") {
-      snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB); // you define this topic
-      snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, node_id.c_str(), command.c_str());
-    }
-
-    xQueueSend(mqttQueue, &mqttMsg, 0);
+  // Re-broadcast if needed
+  // rebroadcastIfNeeded(msg_id, type, msg);
 }
+
 
 // Function to read Modbus data from the RS485 slave
 int readModbusData(uint16_t reg_address, uint8_t max_retries) {
@@ -245,38 +238,6 @@ void getModbusData(){
   Serial.printf("Power Factor: %d\n", powerFactor);
   Serial.println("--------------------------------");
 }
-
-//Make ready for mqtt
-// void ParsingModbusData() {
-//   // Parse energy from Modbus (32-bit value = taeHigh << 16 | taeLow)
-//   uint32_t totalEnergyRaw = ((uint32_t)taeHigh << 16) | (uint32_t)taeLow;
-//   float totaltNetEnergy = totalEnergyRaw * 0.1;  // If energy is in 0.01 kWh units
-//   float tImpEnergy = totalEnergyRaw * 0.1;       // Same value, different name if needed
-
-//   // Scale all measurements
-//   activePower *= 0.1;
-//   pAvolt *= 0.1;
-//   pBvolt *= 0.1;
-//   pCvolt *= 0.1;
-//   lABvolt *= 0.1;
-//   lBCvolt *= 0.1;
-//   lCAvolt *= 0.1;
-//   pAcurrent *= 0.1;
-//   pBcurrent *= 0.1;
-//   pCcurrent *= 0.1;
-//   frequency *= 0.01;
-//   powerFactor *= 0.001;
-
-//   // Format data with exactly two digits after decimal point
-//   snprintf(em_data, sizeof(em_data),
-//     "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
-//     DEVICE_ID,
-//     totaltNetEnergy, tImpEnergy, activePower,
-//     pAvolt, pBvolt, pCvolt,
-//     lABvolt, lBCvolt, lCAvolt,
-//     pAcurrent, pBcurrent, pCcurrent,
-//     frequency, powerFactor);
-// }
 
 // Function to parse Modbus data and prepare MQTT message
 void ParsingModbusData() {
@@ -413,16 +374,16 @@ void mainTask(void *param) {
 
       int commaIndex = input.indexOf(',');
       if (commaIndex < 0) {
-        Serial.println("⚠️ Format: node_id,command");
+        Serial.println("⚠️ Format: receiver_id,command");
       } else {
         Message msg;
-        msg.gw_id = Local_ID;
-        msg.node_id = input.substring(0, commaIndex);
+        msg.sender_id = Local_ID;
+        msg.receiver_id = input.substring(0, commaIndex);
         msg.command = input.substring(commaIndex + 1);
         msg.type = "cmd";
         msg.msg_id = generateMessageID();
 
-        String payload = msg.gw_id + "," + msg.node_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
+        String payload = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
         esp_now_send(broadcastAddress, (uint8_t*)payload.c_str(), payload.length());
         Serial.println("📤 CMD Sent: " + payload);
       }
@@ -555,7 +516,7 @@ void setup() {
     while (true); // halt
   }
 
-  Serial.println("✅ Gateway Ready. Enter node_id,command to send:");
+  Serial.println("✅ Gateway Ready. Enter receiver_id,command to send:");
 
   xTaskCreatePinnedToCore(networkTask, "Network Task", 8 * 1024, NULL, 1, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(mainTask, "Main Task", 16 * 1024, NULL, 1, &mainTaskHandle, 1);
