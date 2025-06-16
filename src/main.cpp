@@ -271,7 +271,7 @@ void ParsingModbusData() {
 
   // Format the final MQTT message string
   snprintf(em_data, sizeof(em_data),
-    "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f",
+    "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
     DEVICE_ID,
     totaltNetEnergy, tImpEnergy, ap,
     va, vb, vc,
