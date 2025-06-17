@@ -19,16 +19,16 @@
 #include <FastLED.h>
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032506160001";
+const char* DEVICE_ID = "11910325061699999";
 const char* Local_ID = "gw0"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 5 * 60 * 1000;
+const unsigned long dataPublishInterval = 2 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
-const unsigned long hbPublishInterval = 2 * 60 * 1000;
+const unsigned long hbPublishInterval = 1 * 60 * 1000;
 
 unsigned long lastHourCheck = 0;
 bool snapshotSentThisHour = false;
@@ -59,10 +59,10 @@ char mqttSubTopic[64];
 #define MQTT_PORT 1883
 #define MQTT_EM_HB "DMA/EM/HB"
 #define MQTT_EM_PUB "DMA/EM/PUB"
-#define MQTT_AC_HB "DMA/AC/HB"
-#define MQTT_AC_PUB "DMA/AC/PUB"
-#define MQTT_AC_SUB "DMA/AC/SUB"
-#define MQTT_AC_ACK "DMA/AC/ACK"
+#define MQTT_AC_HB "DMA/MeshAC/HB"
+#define MQTT_AC_SUB "DMA/MeshAC/SUB"
+#define MQTT_AC_ACK "DMA/MeshAC/ACK"
+// #define MQTT_AC_PUB "DMA/MeshAC/PUB"
 // #define MQTT_CMD "DMA/AC/CMD"
 
 // RS485 Serial2 Pins
