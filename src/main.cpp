@@ -476,6 +476,8 @@ void setup() {
   FastLED.show();
   Serial.println("🔄 Starting Gateway...");
 
+  Serial.println("Gateway ID: " + String(DEVICE_ID));
+
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);
@@ -516,7 +518,7 @@ void setup() {
     while (true); // halt
   }
 
-  Serial.println("✅ Gateway Ready. Enter receiver_id,command to send:");
+  Serial.println("✅ Gateway Ready to Works!");
 
   xTaskCreatePinnedToCore(networkTask, "Network Task", 8 * 1024, NULL, 1, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(mainTask, "Main Task", 16 * 1024, NULL, 1, &mainTaskHandle, 1);

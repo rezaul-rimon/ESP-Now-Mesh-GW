@@ -18,17 +18,22 @@
 #include <freertos/FreeRTOS.h>
 #include <FastLED.h>
 
+// #define DEBUG_MODE true
+// #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
+// #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
+// #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
+
 //Gateway configuration
-const char* DEVICE_ID = "11910325061699999";
+const char* DEVICE_ID = "1191032506160002";
 const char* Local_ID = "gw0"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 2 * 60 * 1000;
+const unsigned long dataPublishInterval = 5 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
-const unsigned long hbPublishInterval = 1 * 60 * 1000;
+const unsigned long hbPublishInterval = 2 * 60 * 1000;
 
 unsigned long lastHourCheck = 0;
 bool snapshotSentThisHour = false;
@@ -112,10 +117,5 @@ struct Message {
     String msg_id;
 };
 
-//Queue to hold recent ACK IDs
-// std::deque<String> recentAckIDs;
-// const size_t maxRecentIDs = 20;
-
-// std::deque<String> recentMsgIDs;  // Global or static variable
 std::deque<String> recentMsgKeys;
 const size_t maxRecentIDs = 20;
