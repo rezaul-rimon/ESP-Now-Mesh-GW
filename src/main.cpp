@@ -130,7 +130,7 @@ String generateMessageID() {
   return String(id);
 }
 
-
+// Callback function for receiving ESP-NOW messages
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   String msg((char*)incomingData, len);
   Serial.println("\n📥 Received: " + msg);
@@ -173,8 +173,17 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   if (type == "ack") {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  } else if (type == "hb" || type == "tmp") {
+  } 
+  // else if (type == "hb" || type == "tmp") {
+  //   snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB);
+  //   snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  // }
+  else if (type == "hb") {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  } 
+  else if (type == "tmp") {
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_TMP);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
 
@@ -183,7 +192,6 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   // Re-broadcast if needed
   // rebroadcastIfNeeded(msg_id, type, msg);
 }
-
 
 // Function to read Modbus data from the RS485 slave
 int readModbusData(uint16_t reg_address, uint8_t max_retries) {
@@ -425,31 +433,72 @@ void mainTask(void *param) {
 }
 
 //Data Publish Task
+// void mqttPublishTask(void *param) {
+//   MqttMessage msg;
+
+//   for (;;) {
+//     if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
+//       if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
+//         if (mqtt.publish(msg.topic, msg.payload)) {
+//           Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
+
+//           // 🔘 LED indication based on topic
+//           if (String(msg.topic) == MQTT_EM_HB) {
+//             leds[0] = CRGB::Blue;
+//             FastLED.show();
+//             vTaskDelay(pdMS_TO_TICKS(500));
+//           } else if(msg.topic == MQTT_EM_PUB) {
+//             leds[0] = CRGB::Green;
+//             FastLED.show();
+//             vTaskDelay(pdMS_TO_TICKS(1000));
+//           }
+//           leds[0] = CRGB::Black;
+//           FastLED.show();
+
+//         } else {
+//           Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
+//         }
+//         xSemaphoreGive(modemMutex);
+//       } else {
+//         Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");
+//       }
+//     }
+//   }
+// }
+
+// Data Publish Task
 void mqttPublishTask(void *param) {
   MqttMessage msg;
 
   for (;;) {
     if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
       if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
-        if (mqtt.publish(msg.topic, msg.payload)) {
-          Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
 
-          // 🔘 LED indication based on topic
-          if (String(msg.topic) == MQTT_EM_HB) {
-            leds[0] = CRGB::Blue;
+        // ✅ Check MQTT connection status before publishing
+        if (mqtt.connected()) {
+          if (mqtt.publish(msg.topic, msg.payload)) {
+            Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
+
+            // 🔘 LED indication based on topic
+            if (String(msg.topic) == MQTT_EM_HB) {
+              leds[0] = CRGB::Blue;
+              FastLED.show();
+              vTaskDelay(pdMS_TO_TICKS(500));
+            } else if (String(msg.topic) == MQTT_EM_PUB) {
+              leds[0] = CRGB::Green;
+              FastLED.show();
+              vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            leds[0] = CRGB::Black;
             FastLED.show();
-            vTaskDelay(pdMS_TO_TICKS(500));
-          } else if(msg.topic == MQTT_EM_PUB) {
-            leds[0] = CRGB::Green;
-            FastLED.show();
-            vTaskDelay(pdMS_TO_TICKS(1000));
+
+          } else {
+            Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
           }
-          leds[0] = CRGB::Black;
-          FastLED.show();
-
         } else {
-          Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
+          Serial.println("⚠️ MQTT not connected, skipping publish");
         }
+
         xSemaphoreGive(modemMutex);
       } else {
         Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");

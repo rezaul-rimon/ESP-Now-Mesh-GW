@@ -24,7 +24,7 @@
 // #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032506160002";
+const char* DEVICE_ID = "1191032506169999";
 const char* Local_ID = "gw0"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -67,7 +67,7 @@ char mqttSubTopic[64];
 #define MQTT_AC_HB "DMA/MeshAC/HB"
 #define MQTT_AC_SUB "DMA/MeshAC/SUB"
 #define MQTT_AC_ACK "DMA/MeshAC/ACK"
-// #define MQTT_AC_PUB "DMA/MeshAC/PUB"
+#define MQTT_AC_TMP "DMA/MeshAC/TEMP"
 // #define MQTT_CMD "DMA/AC/CMD"
 
 // RS485 Serial2 Pins
