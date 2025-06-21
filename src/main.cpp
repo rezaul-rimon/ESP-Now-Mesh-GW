@@ -345,8 +345,17 @@ void networkTask(void *param) {
             Serial.println("❌ Lost GPRS connection");
             gsmConnected = false;
             gsmState = GSM_ERROR;
-          } else if (!mqtt.connected()) {
-            reconnectMqtt();
+          } else {
+            // MQTT reconnect logic with 10-second interval
+            static unsigned long lastAttempt = 0;
+            if (!mqtt.connected()) {
+              if (millis() - lastAttempt > 5000) {  // 5 seconds
+                lastAttempt = millis();
+                reconnectMqtt();
+              }
+            } else {
+              mqtt.loop();  // ✅ Only run mqtt.loop when connected
+            }
           }
           break;
 
@@ -469,42 +478,28 @@ void mainTask(void *param) {
 // Data Publish Task
 void mqttPublishTask(void *param) {
   MqttMessage msg;
-
   for (;;) {
-    if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
-      if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
-
-        // ✅ Check MQTT connection status before publishing
-        if (mqtt.connected()) {
+    if (mqtt.connected()) {
+      if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
+        if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
           if (mqtt.publish(msg.topic, msg.payload)) {
             Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
-
-            // 🔘 LED indication based on topic
-            if (String(msg.topic) == MQTT_EM_HB) {
-              leds[0] = CRGB::Blue;
-              FastLED.show();
-              vTaskDelay(pdMS_TO_TICKS(500));
-            } else if (String(msg.topic) == MQTT_EM_PUB) {
-              leds[0] = CRGB::Green;
-              FastLED.show();
-              vTaskDelay(pdMS_TO_TICKS(1000));
-            }
-            leds[0] = CRGB::Black;
-            FastLED.show();
-
+            // LED logic...
           } else {
             Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
           }
+          xSemaphoreGive(modemMutex);
         } else {
-          Serial.println("⚠️ MQTT not connected, skipping publish");
+          Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");
+          xQueueSendToFront(mqttQueue, &msg, 0); // Requeue to not lose message
         }
-
-        xSemaphoreGive(modemMutex);
-      } else {
-        Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");
       }
+    } else {
+      // Wait and retry after a short delay
+      vTaskDelay(pdMS_TO_TICKS(1000));
     }
   }
+  
 }
 
 // Function to check if it's the top of the hour
