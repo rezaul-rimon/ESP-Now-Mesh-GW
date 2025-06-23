@@ -43,7 +43,7 @@ void reconnectMqtt() {
     leds[0]=CRGB::Orange; 
     FastLED.show();
     char clientId[32];
-    snprintf(clientId, sizeof(clientId), "ac_gsm_%04X%04X", random(0xffff), random(0xffff));
+    snprintf(clientId, sizeof(clientId), "A7670E_%04X%04X", random(0xffff), random(0xffff));
     Serial.print("[MQTT] Connecting as client ID: ");
     Serial.println(clientId);
 
@@ -305,6 +305,7 @@ void powerCycleGSM() {
 
 // Setup function to initialize everything
 void networkTask(void *param) {
+  Serial.println("Network Task Started...");
   enum GsmState { GSM_INIT, GSM_CONNECTING, GSM_CONNECTED, GSM_ERROR };
   GsmState gsmState = GSM_INIT;
   // bool gsmConnected = false;
