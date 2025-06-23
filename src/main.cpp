@@ -345,17 +345,8 @@ void networkTask(void *param) {
             Serial.println("❌ Lost GPRS connection");
             gsmConnected = false;
             gsmState = GSM_ERROR;
-          } else {
-            // MQTT reconnect logic with 10-second interval
-            static unsigned long lastAttempt = 0;
-            if (!mqtt.connected()) {
-              if (millis() - lastAttempt > 5000) {  // 5 seconds
-                lastAttempt = millis();
-                reconnectMqtt();
-              }
-            } else {
-              mqtt.loop();  // ✅ Only run mqtt.loop when connected
-            }
+          } else if (!mqtt.connected()) {
+            reconnectMqtt();
           }
           break;
 
@@ -440,40 +431,6 @@ void mainTask(void *param) {
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
 }
-
-//Data Publish Task
-// void mqttPublishTask(void *param) {
-//   MqttMessage msg;
-
-//   for (;;) {
-//     if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
-//       if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
-//         if (mqtt.publish(msg.topic, msg.payload)) {
-//           Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
-
-//           // 🔘 LED indication based on topic
-//           if (String(msg.topic) == MQTT_EM_HB) {
-//             leds[0] = CRGB::Blue;
-//             FastLED.show();
-//             vTaskDelay(pdMS_TO_TICKS(500));
-//           } else if(msg.topic == MQTT_EM_PUB) {
-//             leds[0] = CRGB::Green;
-//             FastLED.show();
-//             vTaskDelay(pdMS_TO_TICKS(1000));
-//           }
-//           leds[0] = CRGB::Black;
-//           FastLED.show();
-
-//         } else {
-//           Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
-//         }
-//         xSemaphoreGive(modemMutex);
-//       } else {
-//         Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");
-//       }
-//     }
-//   }
-// }
 
 // Data Publish Task
 void mqttPublishTask(void *param) {
