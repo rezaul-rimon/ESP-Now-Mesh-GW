@@ -541,5 +541,5 @@ void setup() {
 
 // Function to check if it's the top of the hour
 void loop() {
-  
+  vTaskDelay(pdMS_TO_TICKS(100)); 
 }
