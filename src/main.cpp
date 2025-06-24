@@ -82,6 +82,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   message.replace(" ", ""); // Removes all internal spaces
   Serial.println("📥 Message: " + message);
 
+  // Check if the message is a ping
+  if(message == "ping") {
+    Serial.println("Ping Arrived!");
+    // Send back an ACK
+    MqttMessage mqttMsg;
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,gsm_available", DEVICE_ID);
+    xQueueSend(mqttQueue, &mqttMsg, 0);
+    return;
+  }
+
   int commaIndex = message.indexOf(',');
   if (commaIndex < 0) {
     Serial.println("⚠️ Format: node_id,command");
