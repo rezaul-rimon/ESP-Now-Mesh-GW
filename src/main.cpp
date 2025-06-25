@@ -499,6 +499,7 @@ void setup() {
   pinMode(AC_LINE_PIN, INPUT); // AC line detection pin
 
   mqtt.setServer(broker, MQTT_PORT);
+  mqtt.setKeepAlive(60);
   mqtt.setCallback(mqttCallback);
 
   WiFi.mode(WIFI_STA);
