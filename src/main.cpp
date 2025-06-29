@@ -25,26 +25,6 @@ TaskHandle_t mainTaskHandle;
 TaskHandle_t ledTaskHandle;
 // TaskHandle_t wifiResetTaskHandle;
 
-CRGB lastStatusColor = CRGB::Black;  // Default off
-
-void updateStatusLED() {
-  CRGB desiredColor;
-
-  if (!gsmConnected) {
-    desiredColor = CRGB::Red;        // GSM not connected
-  } else if (!mqtt.connected()) {
-    desiredColor = CRGB::Yellow;     // GSM connected, MQTT not
-  } else {
-    desiredColor = CRGB::Black;      // All good
-  }
-
-  if (desiredColor != lastStatusColor) {
-    leds[0] = desiredColor;
-    FastLED.show();
-    lastStatusColor = desiredColor;
-  }
-}
-
 // Function to connect to GSM network
 bool connectGSM() {
   Serial.println("[GSM] Initializing modem...");
@@ -86,11 +66,12 @@ void reconnectMqtt() {
       mqtt.subscribe(mqttSubTopic);
       Serial.print("[MQTT] Subscribed to: ");
       Serial.println(mqttSubTopic);
+      LedBlink mqttConnectedbBlink = {CRGB::Green, 250, 1, 100};  // on_duraton, repeat, gap_duration
+      xQueueSend(ledQueue, &mqttConnectedbBlink, 0);
+
     } else {
       Serial.printf("[MQTT] ❌ Connect failed (rc=%d)\n", mqtt.state());
     }
-
-    updateStatusLED();  // 🟡 or ⚫
   }
 }
 
@@ -346,8 +327,8 @@ void powerCycleGSM() {
   xQueueSend(ledQueue, &powerCycleBlink, 0);
   delay(5000);  // Give time to boot fully
 
-  leds[0] = CRGB::Black;
-  FastLED.show();
+  // leds[0] = CRGB::Black;
+  // FastLED.show();
 }
 
 // Function to handle GSM and MQTT tasks
@@ -363,10 +344,13 @@ void networkTask(void *param) {
     // 📶 Maintain GSM and MQTT Connections
     switch (gsmState) {
       case GSM_INIT:
+        leds[0] = CRGB::Red;  // Indicate GSM not connected
+        FastLED.show();
         Serial.println("[GSM] Initializing modem...");
         modem.init();  // Safe replacement for modem.restart()
+        leds[0] = CRGB::Red;
+        FastLED.show();
         gsmState = GSM_CONNECTING;
-        updateStatusLED();
         break;
 
       case GSM_CONNECTING:
@@ -375,6 +359,8 @@ void networkTask(void *param) {
           if (modem.gprsConnect(apn)) {
             Serial.println("[GSM] Connected to GPRS");
             gsmConnected = true;
+            leds[0] = CRGB::Yellow;  // Indicate GSM not connected
+            FastLED.show();
             reconnectMqtt(); // Try to connect MQTT now
             gsmState = GSM_CONNECTED;
           } else {
@@ -385,7 +371,6 @@ void networkTask(void *param) {
           Serial.println("❌ SIM or Network not ready");
           gsmState = GSM_ERROR;
         }
-        updateStatusLED();
         break;
 
       case GSM_CONNECTED:
@@ -394,20 +379,39 @@ void networkTask(void *param) {
           gsmConnected = false;
           gsmState = GSM_ERROR;
         } else if (!mqtt.connected()) {
+          leds[0] = CRGB::Yellow;  // Indicate GSM not connected
+          FastLED.show();
           reconnectMqtt(); // Try again
         }
-        updateStatusLED();
         break;
 
       case GSM_ERROR:
         Serial.println("[GSM] GSM Error. Power cycling...");
+        leds[0] = CRGB::Red;  // Indicate GSM not connected
+        FastLED.show();
         gsmConnected = false;
         powerCycleGSM();
         vTaskDelay(pdMS_TO_TICKS(8000));
         gsmState = GSM_INIT;
-        updateStatusLED();
         break;
     }
+
+    // 🟢 Update LED status based on GSM and MQTT connection
+    if (!gsmConnected) {
+      leds[0] = CRGB::Red;  // ❌ GSM not connected
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    } else if (gsmConnected && !mqtt.connected()) {
+      leds[0] = CRGB::Yellow;  // 🟡 MQTT not connected
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    } else if (gsmConnected && mqtt.connected()) {
+      leds[0] = CRGB::Black;  // ✅ All good
+      FastLED.show();
+    }
+
 
     // 🔁 MQTT Loop Handling
     mqtt.loop();
@@ -506,14 +510,17 @@ void ledTask(void *param) {
         leds[0] = blink.color;
         FastLED.show();
         vTaskDelay(pdMS_TO_TICKS(blink.duration));
-        leds[0] = lastStatusColor; // revert to status LED
+
+        leds[0] = CRGB::Black;  // turn off LED after blink
         FastLED.show();
+
         if (i < blink.repeat - 1) {
           vTaskDelay(pdMS_TO_TICKS(blink.gap));
         }
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(20)); // yield to watchdog
+
+    vTaskDelay(pdMS_TO_TICKS(10));  // just yield to keep watchdog happy
   }
 }
 
