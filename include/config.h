@@ -25,6 +25,7 @@
 
 //Gateway configuration
 const char* DEVICE_ID = "1191032506169999";
+
 const char* Local_ID = "gw0"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -116,6 +117,14 @@ struct Message {
     String type;
     String msg_id;
 };
+
+typedef struct {
+    CRGB color;
+    uint16_t duration;  // ms
+    uint8_t repeat;     // number of times to blink
+    uint16_t gap;       // optional gap between blinks
+} LedBlink;
+
 
 std::deque<String> recentMsgKeys;
 const size_t maxRecentIDs = 20;

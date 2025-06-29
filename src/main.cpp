@@ -17,58 +17,87 @@ TinyGsmClient gsmClient(modem);
 PubSubClient mqtt(gsmClient);
 
 //FreeRTOS Tasks and instance
+QueueHandle_t ledQueue;
 QueueHandle_t mqttQueue;
 SemaphoreHandle_t modemMutex;
 TaskHandle_t networkTaskHandle;
 TaskHandle_t mainTaskHandle;
+TaskHandle_t ledTaskHandle;
 // TaskHandle_t wifiResetTaskHandle;
+
+CRGB lastStatusColor = CRGB::Black;  // Default off
+
+void updateStatusLED() {
+  CRGB desiredColor;
+
+  if (!gsmConnected) {
+    desiredColor = CRGB::Red;        // GSM not connected
+  } else if (!mqtt.connected()) {
+    desiredColor = CRGB::Yellow;     // GSM connected, MQTT not
+  } else {
+    desiredColor = CRGB::Black;      // All good
+  }
+
+  if (desiredColor != lastStatusColor) {
+    leds[0] = desiredColor;
+    FastLED.show();
+    lastStatusColor = desiredColor;
+  }
+}
 
 // Function to connect to GSM network
 bool connectGSM() {
   Serial.println("[GSM] Initializing modem...");
-  modem.restart();
-  vTaskDelay(pdMS_TO_TICKS(3000)); // Adjust delay as needed
-  
-  if (modem.getSimStatus() != SIM_READY) return false;
-  Serial.println("[GSM] Connecting to network...");
-  if (!modem.waitForNetwork()) return false;
-  if (!modem.gprsConnect(apn)) return false;
-  Serial.println("[GSM] Connected to GPRS!");
+  modem.init();  // Safer than restart()
+  delay(1000);
+
+  if (modem.getSimStatus() != SIM_READY) {
+    Serial.println("❌ SIM not ready");
+    return false;
+  }
+
+  Serial.println("[GSM] Waiting for network...");
+  if (!modem.waitForNetwork(10000)) {
+    Serial.println("❌ Network not found");
+    return false;
+  }
+
+  Serial.println("[GSM] Connecting to GPRS...");
+  if (!modem.gprsConnect(apn)) {
+    Serial.println("❌ GPRS failed");
+    return false;
+  }
+
+  Serial.println("[GSM] ✅ Connected to GPRS!");
   return true;
 }
 
-// Function to reconnect to MQTT broker
+// Function to handle network operations
 void reconnectMqtt() {
   if (!mqtt.connected() && gsmConnected) {
-    leds[0]=CRGB::Orange; 
-    FastLED.show();
     char clientId[32];
-    snprintf(clientId, sizeof(clientId), "A7670E_%04X%04X", random(0xffff), random(0xffff));
+    snprintf(clientId, sizeof(clientId), "A7670E_%04X", random(0xFFFF));
     Serial.print("[MQTT] Connecting as client ID: ");
     Serial.println(clientId);
 
     if (mqtt.connect(clientId, mqttUser, mqttPass)) {
-      Serial.println("[MQTT] Connected");
-      leds[0]=CRGB::Black; 
-      FastLED.show();
+      Serial.println("[MQTT] ✅ Connected");
       snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_AC_SUB, DEVICE_ID);
       mqtt.subscribe(mqttSubTopic);
-      Serial.print("[MQTT] Subscribed to topic: ");
+      Serial.print("[MQTT] Subscribed to: ");
       Serial.println(mqttSubTopic);
     } else {
-      Serial.print("[MQTT] Failed, rc=");
-      Serial.println(mqtt.state());
+      Serial.printf("[MQTT] ❌ Connect failed (rc=%d)\n", mqtt.state());
     }
+
+    updateStatusLED();  // 🟡 or ⚫
   }
 }
 
 // Callback function for MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  leds[0]=CRGB::Blue; 
-  FastLED.show();
-  vTaskDelay(pdMS_TO_TICKS(100));
-  leds[0]=CRGB::Black;
-  FastLED.show();
+  // LedBlink mqttbBlink = {CRGB::Blue, 150, 1, 150};  // on_duraton, repeat, gap_duration
+  // xQueueSend(ledQueue, &mqttbBlink, 0);
 
   String message;
   for (unsigned int i = 0; i < length; i++) {
@@ -90,17 +119,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,gsm_available", DEVICE_ID);
     xQueueSend(mqttQueue, &mqttMsg, 0);
+    
+    LedBlink pingBlink = {CRGB::Green, 250, 2, 250};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &pingBlink, 0);
     return;
   }
 
   int commaIndex = message.indexOf(',');
   if (commaIndex < 0) {
     Serial.println("⚠️ Format: node_id,command");
-    leds[0]=CRGB::Orange; 
-    FastLED.show();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    leds[0]=CRGB::Black;
-    FastLED.show();
+    LedBlink cmdErrorBlink = {CRGB::Orange, 150, 2, 150};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &cmdErrorBlink, 0);
     return;
   }
 
@@ -184,11 +213,11 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   if (type == "ack") {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+    
+    LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &ackBlink, 0);
   } 
-  // else if (type == "hb" || type == "tmp") {
-  //   snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB);
-  //   snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  // }
+  
   else if (type == "hb") {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
@@ -302,84 +331,101 @@ void ParsingModbusData() {
 // Function to power cycle the GSM module
 void powerCycleGSM() {
   Serial.println("🔁 Power cycling GSM module...");
-  digitalWrite(MODEM_PWR, LOW);   // Turn off GSM
-  leds[0]=CRGB::Red; 
+  pinMode(MODEM_PWR, OUTPUT);
+  LedBlink powerCycleBlink = {CRGB::Red, 150, 2, 150};  // on_duraton, repeat, gap_duration
+  xQueueSend(ledQueue, &powerCycleBlink, 0);
+  leds[0] = CRGB::Red;
   FastLED.show();
-  delay(2000);                    // Wait 2 seconds
-  digitalWrite(MODEM_PWR, HIGH);  // Turn on GSM
-  leds[0]=CRGB::Orange; 
+
+  digitalWrite(MODEM_PWR, LOW);
+  delay(1000);  // Hold PWRKEY low for 1s
+  digitalWrite(MODEM_PWR, HIGH); // Release
+  delay(100);  // Allow settling
+
+  powerCycleBlink = {CRGB::Orange, 150, 2, 150};  // on_duraton, repeat, gap_duration
+  xQueueSend(ledQueue, &powerCycleBlink, 0);
+  delay(5000);  // Give time to boot fully
+
+  leds[0] = CRGB::Black;
   FastLED.show();
-  delay(3000);
-  leds[0]=CRGB::Black; 
-  FastLED.show();                    // Wait 3 seconds for boot
 }
 
-// Setup function to initialize everything
+// Function to handle GSM and MQTT tasks
 void networkTask(void *param) {
-  Serial.println("Network Task Started...");
+  Serial.println("📡 GSM/MQTT Task Started...");
+
   enum GsmState { GSM_INIT, GSM_CONNECTING, GSM_CONNECTED, GSM_ERROR };
   GsmState gsmState = GSM_INIT;
-  // bool gsmConnected = false;
+
+  MqttMessage msg;
 
   for (;;) {
-    if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(200))) {
-      mqtt.loop();
+    // 📶 Maintain GSM and MQTT Connections
+    switch (gsmState) {
+      case GSM_INIT:
+        Serial.println("[GSM] Initializing modem...");
+        modem.init();  // Safe replacement for modem.restart()
+        gsmState = GSM_CONNECTING;
+        updateStatusLED();
+        break;
 
-      switch (gsmState) {
-        case GSM_INIT:
-          Serial.println("[GSM] Restarting modem...");
-          leds[0]=CRGB::Red; 
-          FastLED.show();
-          modem.restart();
-          delay(2000);
-          gsmState = GSM_CONNECTING;
-          break;
-
-        case GSM_CONNECTING:
-          Serial.println("[GSM] Checking SIM and Network...");
-          if (modem.getSimStatus() == SIM_READY && modem.waitForNetwork()) {
-            if (modem.gprsConnect(apn)) {
-              Serial.println("[GSM] Connected to GPRS");
-              gsmConnected = true;
-              gsmState = GSM_CONNECTED;
-            } else {
-              Serial.println("❌ Failed to connect GPRS");
-              gsmState = GSM_ERROR;
-            }
+      case GSM_CONNECTING:
+        Serial.println("[GSM] Checking SIM and Network...");
+        if (modem.getSimStatus() == SIM_READY && modem.waitForNetwork()) {
+          if (modem.gprsConnect(apn)) {
+            Serial.println("[GSM] Connected to GPRS");
+            gsmConnected = true;
+            reconnectMqtt(); // Try to connect MQTT now
+            gsmState = GSM_CONNECTED;
           } else {
-            Serial.println("❌ SIM or Network not ready");
+            Serial.println("❌ Failed to connect GPRS");
             gsmState = GSM_ERROR;
           }
-          break;
+        } else {
+          Serial.println("❌ SIM or Network not ready");
+          gsmState = GSM_ERROR;
+        }
+        updateStatusLED();
+        break;
 
-        case GSM_CONNECTED:
-          if (!modem.isGprsConnected()) {
-            Serial.println("❌ Lost GPRS connection");
-            gsmConnected = false;
-            gsmState = GSM_ERROR;
-          } else if (!mqtt.connected()) {
-            reconnectMqtt();
-          }
-          break;
-
-        case GSM_ERROR:
-          Serial.println("[GSM] GSM Error. Power cycling...");
+      case GSM_CONNECTED:
+        if (!modem.isGprsConnected()) {
+          Serial.println("❌ Lost GPRS");
           gsmConnected = false;
+          gsmState = GSM_ERROR;
+        } else if (!mqtt.connected()) {
+          reconnectMqtt(); // Try again
+        }
+        updateStatusLED();
+        break;
 
-          // 🔁 Try hardware reset
-          powerCycleGSM();
-
-          vTaskDelay(pdMS_TO_TICKS(2000));
-          gsmState = GSM_INIT;
-          break;
-      }
-
-      xSemaphoreGive(modemMutex);
-    } else {
-      Serial.println("⚠️ Could not acquire modem mutex, from networkTask");
+      case GSM_ERROR:
+        Serial.println("[GSM] GSM Error. Power cycling...");
+        gsmConnected = false;
+        powerCycleGSM();
+        vTaskDelay(pdMS_TO_TICKS(8000));
+        gsmState = GSM_INIT;
+        updateStatusLED();
+        break;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(100));
+    // 🔁 MQTT Loop Handling
+    mqtt.loop();
+
+    // 📤 Check for any MQTT message to publish
+    if (mqtt.connected()) {
+      if (xQueueReceive(mqttQueue, &msg, 0) == pdTRUE) {
+        if (mqtt.publish(msg.topic, msg.payload)) {
+          Serial.printf("[MQTT] Published: %s → %s\n", msg.topic, msg.payload);
+        } else {
+          Serial.printf("[MQTT] ❌ Publish failed: %s\n", msg.topic);
+          LedBlink dataSendErrorBlink = {CRGB::Red, 250, 2, 250};  // on_duraton, repeat, gap_duration
+          xQueueSend(ledQueue, &dataSendErrorBlink, 0);
+        }
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(200)); // prevent WDT
   }
 }
 
@@ -422,6 +468,9 @@ void mainTask(void *param) {
       USE_SD_CARD ? 1 : 0);
 
     xQueueSend(mqttQueue, &hbMsg, 0);
+    
+    LedBlink hbBlink = {CRGB::Blue, 500, 2, 300};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &hbBlink, 0);
   }
 
     // 📊 Modbus Data via MQTT queue
@@ -438,37 +487,34 @@ void mainTask(void *param) {
       snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s", em_data);
 
       xQueueSend(mqttQueue, &dataMsg, 0);
+
+      LedBlink dataBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
+      xQueueSend(ledQueue, &dataBlink, 0);
     }
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
 }
 
-// Data Publish Task
-void mqttPublishTask(void *param) {
-  MqttMessage msg;
+// LED task to handle blinking and status updates
+void ledTask(void *param) {
+  LedBlink blink;
+
   for (;;) {
-    if (mqtt.connected()) {
-      if (xQueueReceive(mqttQueue, &msg, portMAX_DELAY) == pdTRUE) {
-        if (xSemaphoreTake(modemMutex, pdMS_TO_TICKS(1000))) {
-          if (mqtt.publish(msg.topic, msg.payload)) {
-            Serial.printf("[MQTT] Published to %s: %s\n", msg.topic, msg.payload);
-            // LED logic...
-          } else {
-            Serial.printf("[MQTT] Failed to publish to %s\n", msg.topic);
-          }
-          xSemaphoreGive(modemMutex);
-        } else {
-          Serial.println("⚠️ Could not acquire modem mutex in mqttPublishTask");
-          xQueueSendToFront(mqttQueue, &msg, 0); // Requeue to not lose message
+    if (xQueueReceive(ledQueue, &blink, portMAX_DELAY) == pdTRUE) {
+      for (int i = 0; i < blink.repeat; i++) {
+        leds[0] = blink.color;
+        FastLED.show();
+        vTaskDelay(pdMS_TO_TICKS(blink.duration));
+        leds[0] = lastStatusColor; // revert to status LED
+        FastLED.show();
+        if (i < blink.repeat - 1) {
+          vTaskDelay(pdMS_TO_TICKS(blink.gap));
         }
       }
-    } else {
-      // Wait and retry after a short delay
-      vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    vTaskDelay(pdMS_TO_TICKS(20)); // yield to watchdog
   }
-  
 }
 
 // Function to check if it's the top of the hour
@@ -520,7 +566,7 @@ void setup() {
   Serial2.begin(9600, SERIAL_8N1, RS485_RX, RS485_TX);
   node.begin(1, Serial2);
 
-  mqttQueue = xQueueCreate(10, sizeof(MqttMessage));
+  mqttQueue = xQueueCreate(50, sizeof(MqttMessage));
   if (mqttQueue == NULL) {
     Serial.println("❌ Failed to create mqttQueue");
     while (1); // Stop here if failed
@@ -531,12 +577,17 @@ void setup() {
     Serial.println("❌ Failed to create modemMutex");
     while (true); // halt
   }
+  ledQueue = xQueueCreate(10, sizeof(LedBlink));
+  if (ledQueue == NULL) {
+    Serial.println("❌ Failed to create ledQueue");
+    while (true); // Stop here if failed
+  }
 
   Serial.println("✅ Gateway Ready to Works!");
 
-  xTaskCreatePinnedToCore(networkTask, "Network Task", 8 * 1024, NULL, 1, &networkTaskHandle, 0);
-  xTaskCreatePinnedToCore(mainTask, "Main Task", 16 * 1024, NULL, 1, &mainTaskHandle, 1);
-  xTaskCreatePinnedToCore(mqttPublishTask, "MQTT Pub Task", 6 * 1024, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(ledTask, "LED Task", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(networkTask, "Network Task", 10 * 1024, NULL, 1, &networkTaskHandle, 0);
+  xTaskCreatePinnedToCore(mainTask, "Main Task", 8 * 1024, NULL, 1, &mainTaskHandle, 1);
 
 }
 
