@@ -437,10 +437,10 @@ void networkTask(void *param) {
           if (modem.gprsConnect(apn)) {
             Serial.println("[GSM] Connected to GPRS");
             gsmConnected = true;
+            gsmState = GSM_CONNECTED;
             leds[0] = CRGB::Yellow;  // Indicate GSM not connected
             FastLED.show();
             reconnectMqtt(); // Try to connect MQTT now
-            gsmState = GSM_CONNECTED;
           } else {
             Serial.println("❌ Failed to connect GPRS");
             gsmState = GSM_ERROR;

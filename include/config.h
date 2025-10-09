@@ -18,15 +18,15 @@
 #include <freertos/FreeRTOS.h>
 #include <FastLED.h>
 
-// #define DEBUG_MODE true
-// #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
-// #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
-// #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
+#define DEBUG_MODE false
+#define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
+#define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
+#define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032506160003";
-#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
-//#define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
+const char* DEVICE_ID = "1191032506160019"; // Device ID
+//#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
+#define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
 
 const char* Local_ID = "gw0"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
