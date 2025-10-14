@@ -16,6 +16,7 @@
 #include <deque>
 #include <algorithm>
 #include <freertos/FreeRTOS.h>
+#include <esp_task_wdt.h>
 #include <FastLED.h>
 
 #define DEBUG_MODE false
@@ -24,7 +25,7 @@
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032506160019"; // Device ID
+const char* DEVICE_ID = "1191032506160010"; // Device ID
 //#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
 #define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
 
@@ -41,6 +42,8 @@ const unsigned long hbPublishInterval = 2 * 60 * 1000;
 unsigned long lastHourCheck = 0;
 bool snapshotSentThisHour = false;
 
+bool ledState = false;
+
 //FastLED library for controlling LEDs
 #define LED_PIN 4
 #define NUM_LEDS 1
@@ -54,9 +57,9 @@ CRGB leds[NUM_LEDS];
 #define MODEM_PWR 15
 #define SIM_BAUD 115200
 
-const char apn[] = "blweb";
-const char user[] = "";
-const char pass[] = "";
+const char apn[] = "internet"; // APN
+const char apnUser[] = "";
+const char apnPass[] = "";
 const char* broker = "broker2.dma-bd.com";
 const char* mqttUser = "broker2";
 const char* mqttPass = "Secret!@#$1234";

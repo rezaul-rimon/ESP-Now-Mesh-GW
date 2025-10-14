@@ -5,11 +5,13 @@
 void networkTask(void *param); 
 void mainTask(void *param);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
-bool connectGSM();
 void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
 bool isDuplicate(const String& msg_id);
+void powerCycleModem();
+bool initializeModem();
+bool connectToNetwork();
 
 //Objects for GSM, MQTT, and ESP-NOW
 TinyGsm modem(SerialAT);
@@ -26,35 +28,58 @@ TaskHandle_t ledTaskHandle;
 // TaskHandle_t wifiResetTaskHandle;
 
 // Function to connect to GSM network
-bool connectGSM() {
-  Serial.println("[GSM] Initializing modem...");
-  modem.init();  // Safer than restart()
-  delay(1000);
+void powerCycleModem() {
+  digitalWrite(MODEM_PWR, LOW);
+  vTaskDelay(pdMS_TO_TICKS(1200)); // Power key press
+  digitalWrite(MODEM_PWR, HIGH);
 
-  if (modem.getSimStatus() != SIM_READY) {
-    Serial.println("❌ SIM not ready");
-    return false;
+  int waitTime = 0;
+  while (!modem.testAT() && waitTime < 15000) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      waitTime += 500;
+  }
+}
+
+bool initializeModem() {
+  powerCycleModem();
+
+  if (!modem.restart()) {
+      Serial.println("Modem restart failed");
+      return false;
   }
 
-  Serial.println("[GSM] Waiting for network...");
-  if (!modem.waitForNetwork(10000)) {
-    Serial.println("❌ Network not found");
-    return false;
+  Serial.println("Modem initialized");
+  return true;
+}
+
+bool connectToNetwork() {
+  Serial.println("Connecting to network...");
+  leds[0] = CRGB::Red;  // Indicate GSM connecting
+  FastLED.show();
+  ledState = false;
+
+  modem.restart();
+  
+  if (!modem.waitForNetwork()) {
+      Serial.println("Network connection failed");
+      gsmConnected = true;
+      return false;
   }
 
-  Serial.println("[GSM] Connecting to GPRS...");
-  if (!modem.gprsConnect(apn)) {
-    Serial.println("❌ GPRS failed");
-    return false;
+  if (!modem.gprsConnect(apn, apnUser, apnPass)) {
+      Serial.println("GPRS connection failed");
+      gsmConnected = true;
+      return false;
   }
 
-  Serial.println("[GSM] ✅ Connected to GPRS!");
+  Serial.println("Network connected");
+  gsmConnected = true;
   return true;
 }
 
 // Function to handle network operations
 void reconnectMqtt() {
-  if (!mqtt.connected() && gsmConnected) {
+  if (!mqtt.connected() && modem.isGprsConnected()) {
     char clientId[32];
     snprintf(clientId, sizeof(clientId), "A7670E_%04X", random(0xFFFF));
     Serial.print("[MQTT] Connecting as client ID: ");
@@ -387,114 +412,77 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 #endif
 
-// Function to power cycle the GSM module
-void powerCycleGSM() {
-  Serial.println("🔁 Power cycling GSM module...");
-  pinMode(MODEM_PWR, OUTPUT);
-  LedBlink powerCycleBlink = {CRGB::Red, 150, 2, 150};  // on_duraton, repeat, gap_duration
-  xQueueSend(ledQueue, &powerCycleBlink, 0);
-  leds[0] = CRGB::Red;
-  FastLED.show();
-
-  digitalWrite(MODEM_PWR, LOW);
-  delay(1000);  // Hold PWRKEY low for 1s
-  digitalWrite(MODEM_PWR, HIGH); // Release
-  delay(100);  // Allow settling
-
-  powerCycleBlink = {CRGB::Orange, 150, 2, 150};  // on_duraton, repeat, gap_duration
-  xQueueSend(ledQueue, &powerCycleBlink, 0);
-  delay(5000);  // Give time to boot fully
-
-  // leds[0] = CRGB::Black;
-  // FastLED.show();
-}
-
-// Function to handle GSM and MQTT tasks
+//New network task after fixes
 void networkTask(void *param) {
-  Serial.println("📡 GSM/MQTT Task Started...");
+  leds[0] = CRGB::Red;  // Indicate GSM not connected
+  FastLED.show();
+  ledState = false;
 
-  enum GsmState { GSM_INIT, GSM_CONNECTING, GSM_CONNECTED, GSM_ERROR };
-  GsmState gsmState = GSM_INIT;
+  uint8_t connectionRetries = 0;
+  const uint8_t MAX_CONNECTION_RETRIES = 5;
+  const unsigned long CONNECTION_RETRY_DELAY = 30000UL;  // 30 seconds between retries
 
+  Serial.println("[NET] Network task started");
+
+  if (!initializeModem() || !connectToNetwork()) {
+      Serial.println("[NET] Initialization failed - restarting esp");
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      ESP.restart();
+  }
+
+  unsigned long lastReconnectAttempt = 0;
   MqttMessage msg;
 
   for (;;) {
-    // 📶 Maintain GSM and MQTT Connections
-    switch (gsmState) {
-      case GSM_INIT:
-        leds[0] = CRGB::Red;  // Indicate GSM not connected
-        FastLED.show();
-        Serial.println("[GSM] Initializing modem...");
-        modem.init();  // Safe replacement for modem.restart()
-        leds[0] = CRGB::Red;
-        FastLED.show();
-        gsmState = GSM_CONNECTING;
-        break;
+      esp_task_wdt_reset();  // 🛡 Feed WDT
 
-      case GSM_CONNECTING:
-        Serial.println("[GSM] Checking SIM and Network...");
-        if (modem.getSimStatus() == SIM_READY && modem.waitForNetwork()) {
-          if (modem.gprsConnect(apn)) {
-            Serial.println("[GSM] Connected to GPRS");
-            gsmConnected = true;
-            gsmState = GSM_CONNECTED;
-            leds[0] = CRGB::Yellow;  // Indicate GSM not connected
-            FastLED.show();
-            reconnectMqtt(); // Try to connect MQTT now
-          } else {
-            Serial.println("❌ Failed to connect GPRS");
-            gsmState = GSM_ERROR;
+      // Network connection management
+      if (!modem.isGprsConnected()) {
+          if (!connectToNetwork()) {
+              // If connection fails, try resetting modem
+              if (connectionRetries >= MAX_CONNECTION_RETRIES) {
+                  Serial.println("Max connection retries reached. Resetting modem...");
+                  initializeModem();
+                  connectionRetries = 0;
+              } else {
+                  Serial.printf("Retry %d/%d in %ds...\n", 
+                              connectionRetries + 1, 
+                              MAX_CONNECTION_RETRIES,
+                              CONNECTION_RETRY_DELAY/1000);
+                  
+                  // Non-blocking wait with WDT feed
+                  uint32_t retryStart = millis();
+                  while (millis() - retryStart < CONNECTION_RETRY_DELAY) {
+                      esp_task_wdt_reset();
+                      vTaskDelay(pdMS_TO_TICKS(100));
+                  }
+                  
+                  connectionRetries++;
+              }
+              continue;  // Skip rest until connected
           }
-        } else {
-          Serial.println("❌ SIM or Network not ready");
-          gsmState = GSM_ERROR;
-        }
-        break;
+          connectionRetries = 0;  // Reset on successful connection
+      }
 
-      case GSM_CONNECTED:
-        if (!modem.isGprsConnected()) {
-          Serial.println("❌ Lost GPRS");
-          gsmConnected = false;
-          gsmState = GSM_ERROR;
-        } else if (!mqtt.connected()) {
-          leds[0] = CRGB::Yellow;  // Indicate GSM not connected
-          FastLED.show();
-          reconnectMqtt(); // Try again
-        }
-        break;
-
-      case GSM_ERROR:
-        Serial.println("[GSM] GSM Error. Power cycling...");
-        leds[0] = CRGB::Red;  // Indicate GSM not connected
+      // MQTT connection management
+      if (modem.isGprsConnected() && !mqtt.connected()) {
+        leds[0] = CRGB::Yellow;  // Indicate MQTT not connected
         FastLED.show();
-        gsmConnected = false;
-        powerCycleGSM();
-        vTaskDelay(pdMS_TO_TICKS(8000));
-        gsmState = GSM_INIT;
-        break;
-    }
+        ledState = false;
+        reconnectMqtt();
+      }
 
-    // 🟢 Update LED status based on GSM and MQTT connection
-    if (!gsmConnected) {
-      leds[0] = CRGB::Red;  // ❌ GSM not connected
-      FastLED.show();
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      continue;
-    } else if (gsmConnected && !mqtt.connected()) {
-      leds[0] = CRGB::Yellow;  // 🟡 MQTT not connected
-      FastLED.show();
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      continue;
-    } else if (gsmConnected && mqtt.connected()) {
-      leds[0] = CRGB::Black;  // ✅ All good
-      FastLED.show();
-    }
+      // Process MQTT messages if connected
+      if (mqtt.connected()) {
+        if(ledState == false){
+          leds[0] = CRGB::Black;  // Indicate all good
+          FastLED.show();
+          ledState = true;
+        }
+        // Check for any MQTT message to publish
+        mqtt.loop();
+      }
 
-
-    // 🔁 MQTT Loop Handling
-    mqtt.loop();
-
-    // 📤 Check for any MQTT message to publish
     if (mqtt.connected()) {
       if (xQueueReceive(mqttQueue, &msg, 0) == pdTRUE) {
         if (mqtt.publish(msg.topic, msg.payload)) {
@@ -507,7 +495,7 @@ void networkTask(void *param) {
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(200)); // prevent WDT
+      vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
 
