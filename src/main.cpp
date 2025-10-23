@@ -593,6 +593,34 @@ void ledTask(void *param) {
 // Function to check if it's the top of the hour
 void setup() {
   Serial.begin(115200);
+
+  preferences.begin("device_data", false);  // Open Preferences (NVS)
+  static String device_id; // Static variable to persist scope
+  
+  #if CHANGE_DEICE_ID
+    // Construct new device ID
+    device_id = String(WORK_PACKAGE) + GW_TYPE + FIRMWARE_UPDATE_DATE + DEVICE_SERIAL;
+    
+    // Save device ID to Preferences
+    preferences.putString("device_id", device_id);
+    Serial.println("Device ID updated in Preferences: " + device_id);
+  #else
+    // Restore device ID from Preferences
+    device_id = preferences.getString("device_id", "UNKNOWN");
+    Serial.println("Restored Device ID from Preferences: " + device_id);
+  #endif
+
+  DEVICE_ID = device_id.c_str(); // Assign to global pointer
+
+  preferences.end();
+
+  //=========================================
+
+  DEBUG_PRINT("Device ID: ");
+  DEBUG_PRINTLN(DEVICE_ID);
+  
+  // Serial.println("Gateway ID: " + String(DEVICE_ID));
+
   FastLED.addLeds<NEOPIXEL,LED_PIN>(leds,NUM_LEDS);
   
   leds[0]=CRGB::Red; 
@@ -608,7 +636,6 @@ void setup() {
   FastLED.show();
   Serial.println("🔄 Starting Gateway...");
 
-  Serial.println("Gateway ID: " + String(DEVICE_ID));
 
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);

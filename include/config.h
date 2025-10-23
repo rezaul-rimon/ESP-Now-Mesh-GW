@@ -18,6 +18,9 @@
 #include <freertos/FreeRTOS.h>
 #include <esp_task_wdt.h>
 #include <FastLED.h>
+#include <Preferences.h>
+
+Preferences preferences;
 
 #define DEBUG_MODE false
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
@@ -25,8 +28,22 @@
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
 //Gateway configuration
-const char* DEVICE_ID = "1191032506160010"; // Device ID
+// const char* DEVICE_ID = "1191032506160010"; // Device ID
 //#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
+
+#define CHANGE_DEICE_ID 0
+
+#if CHANGE_DEICE_ID
+    #define WORK_PACKAGE "1191"
+    #define GW_TYPE "03"
+    #define FIRMWARE_UPDATE_DATE "251015" 
+    #define DEVICE_SERIAL "0099"
+    //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
+#endif
+
+const char* DEVICE_ID;
+
+
 #define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
 
 const char* Local_ID = "gw0"; // Gateway ID
