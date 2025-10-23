@@ -25,6 +25,7 @@ SemaphoreHandle_t modemMutex;
 TaskHandle_t networkTaskHandle;
 TaskHandle_t mainTaskHandle;
 TaskHandle_t ledTaskHandle;
+// TaskHandle_t otaTaskHandle = NULL;
 // TaskHandle_t wifiResetTaskHandle;
 
 
@@ -245,6 +246,19 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     xQueueSend(ledQueue, &pingBlink, 0);
     return;
   }
+  //====================================
+
+  // Check for OTA update command
+  if (message == "update_firmware") {
+    Serial.println("Starting OTA Task...");
+    // if (otaTaskHandle == NULL) {
+    //   xTaskCreatePinnedToCore(otaTask, "OTA Task", 8*1024, NULL, 1, &otaTaskHandle, 1);
+    // } else {
+    //   Serial.println("OTA Task already running.");
+    // }
+  }
+  //====================================
+
 
   int commaIndex = message.indexOf(',');
   if (commaIndex < 0) {
@@ -714,6 +728,7 @@ void networkTask(void *param) {
 */
 // =============================
 
+// MAIN TASK CORE
 // Main task to handle serial commands, heartbeat, and Modbus data
 void mainTask(void *param) {
   for (;;) {

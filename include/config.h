@@ -18,6 +18,7 @@
 #include <freertos/FreeRTOS.h>
 #include <esp_task_wdt.h>
 #include <FastLED.h>
+#include <HTTPClient.h>
 #include <Preferences.h>
 
 Preferences preferences;
@@ -81,6 +82,8 @@ const char* broker = "broker2.dma-bd.com";
 const char* mqttUser = "broker2";
 const char* mqttPass = "Secret!@#$1234";
 bool gsmConnected = false;
+const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/ESP-Now-Mesh-GW/tree/with-ota-23oct/ota/firmware.bin";
+
 
 // MQTT settings
 char mqttSubTopic[64]; 
@@ -91,6 +94,7 @@ char mqttSubTopic[64];
 #define MQTT_AC_SUB "DMA/MeshAC/SUB"
 #define MQTT_AC_ACK "DMA/MeshAC/ACK"
 #define MQTT_AC_TMP "DMA/MeshAC/TEMP"
+#define mqtt_pub_topic "DMA/MeshAC/OTA"
 // #define MQTT_CMD "DMA/AC/CMD"
 
 // RS485 Serial2 Pins
