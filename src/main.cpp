@@ -28,6 +28,11 @@ TaskHandle_t ledTaskHandle;
 // TaskHandle_t otaTaskHandle = NULL;
 // TaskHandle_t wifiResetTaskHandle;
 
+//===============================
+// OTA Update Settings
+//================================
+
+//================================
 
 // Function to connect to GSM network
 /*
@@ -773,6 +778,7 @@ void mainTask(void *param) {
     xQueueSend(ledQueue, &hbBlink, 0);
   }
 
+  #if defined(USE_ENERGY_METER)
     // 📊 Modbus Data via MQTT queue
     if (millis() - lastDataPublishTime >= dataPublishInterval) {
       lastDataPublishTime = millis();
@@ -791,6 +797,7 @@ void mainTask(void *param) {
       LedBlink dataBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
       xQueueSend(ledQueue, &dataBlink, 0);
     }
+  #endif
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }

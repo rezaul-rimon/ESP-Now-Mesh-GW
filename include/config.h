@@ -4,6 +4,7 @@
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
+// #define USE_ENERGY_METER
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
@@ -19,11 +20,12 @@
 #include <esp_task_wdt.h>
 #include <FastLED.h>
 #include <HTTPClient.h>
+#include <Update.h>
 #include <Preferences.h>
 
 Preferences preferences;
 
-#define DEBUG_MODE false
+#define DEBUG_MODE true
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
 #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
@@ -82,7 +84,7 @@ const char* broker = "broker2.dma-bd.com";
 const char* mqttUser = "broker2";
 const char* mqttPass = "Secret!@#$1234";
 bool gsmConnected = false;
-const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/ESP-Now-Mesh-GW/tree/with-ota-23oct/ota/firmware.bin";
+const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/ESP-Now-Mesh-GW/main/ota/firmware.bin";
 
 
 // MQTT settings
