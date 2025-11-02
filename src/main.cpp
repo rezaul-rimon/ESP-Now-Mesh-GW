@@ -110,18 +110,6 @@ bool connectToNetwork() {
   return true;
 }
 
-// ---- MQTT connect with timeout + WDT feed ----
-bool mqttConnectWithTimeout(const char *clientId, unsigned long timeoutMs = 8000UL) {
-  unsigned long start = millis();
-  while (millis() - start < timeoutMs) {
-    esp_task_wdt_reset();  // Feed watchdog
-    if (mqtt.connect(clientId, mqttUser, mqttPass)) {
-      return true;         // Success
-    }
-    vTaskDelay(pdMS_TO_TICKS(250)); // Give time for other tasks
-  }
-  return false;  // Timeout
-}
 
 // ---- MQTT state text helper ----
 String mqttStateToText(int state) {
@@ -140,47 +128,56 @@ String mqttStateToText(int state) {
   }
 }
 
-// ---- Reconnect to MQTT broker with retry + auto restart ----
+// ---- MQTT reconnect with exponential backoff and ESP32 restart ----
 void reconnectMqtt() {
     static uint8_t mqttFailCount = 0;
     static unsigned long lastAttempt = 0;
-    const unsigned long RETRY_INTERVAL_MS = 5000; // retry every 5 seconds
+    static unsigned long retryInterval = 5000; // start 5 sec
+    const unsigned long MAX_INTERVAL = 60000;
     const uint8_t MAX_FAILS_BEFORE_RESTART = 10;
 
     if (!mqtt.connected() && modem.isGprsConnected()) {
         unsigned long now = millis();
-        if (now - lastAttempt < RETRY_INTERVAL_MS) return; // wait before next retry
-        lastAttempt = now;  // update last attempt
+        if (now - lastAttempt < retryInterval) return;
+        lastAttempt = now;
 
         char clientId[32];
         snprintf(clientId, sizeof(clientId), "MeshAC_%04X%04X%04X",
-                random(0xFFFF), random(0xFFFF), random(0xFFFF));
+                  random(0xFFFF), random(0xFFFF), random(0xFFFF));
 
         Serial.printf("[%lu ms] [MQTT] Connecting as client ID: %s\n", millis(), clientId);
 
-        if (mqttConnectWithTimeout(clientId)) {
+        if (mqtt.connect(clientId, mqttUser, mqttPass)) {
             mqttFailCount = 0;
+            retryInterval = 5000; // reset backoff
             Serial.println("[MQTT] ✅ Connected");
 
             snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_AC_SUB, DEVICE_ID);
             mqtt.subscribe(mqttSubTopic);
+
+            leds[0] = CRGB::Green; // indicate connected
+            FastLED.show();
         } else {
             mqttFailCount++;
-            Serial.printf("[MQTT] ❌ Connect failed (%d: %s) | Retry %d/%d\n",
-                          mqtt.state(), mqttStateToText(mqtt.state()).c_str(),
-                          mqttFailCount, MAX_FAILS_BEFORE_RESTART);
+            retryInterval = min(retryInterval * 2, MAX_INTERVAL); // exponential backoff
+            Serial.printf("[MQTT] ❌ Connect failed (%d: %s) | Retry %d | Next attempt in %lus\n",
+                          mqtt.state(),
+                          mqttStateToText(mqtt.state()).c_str(),
+                          mqttFailCount,
+                          retryInterval / 1000);
+
+            leds[0] = CRGB::Yellow;
+            FastLED.show();
 
             if (mqttFailCount >= MAX_FAILS_BEFORE_RESTART) {
-                Serial.println("[MQTT] ⚠️ Too many failed attempts — restarting ESP32...");
+                Serial.println("[MQTT] ⚠️ Too many failures — restarting ESP32...");
                 delay(2000);
                 ESP.restart();
             }
         }
     }
 }
-
-// =============================
-
+// -------------------- END MQTT HELPER --------------------
 
 // Callback function for MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
