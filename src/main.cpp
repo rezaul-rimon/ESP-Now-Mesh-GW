@@ -77,7 +77,19 @@ bool initializeModem() {
     return false;
   }
 
-  Serial.println("[NET] ✅ Modem initialized");
+  Serial.println("[NET] ✅ Modem restarted successfully");
+
+  // --- Step 1: Force GPRS detach and reattach ---
+  Serial.println("[NET] Resetting GPRS attachment...");
+  modem.sendAT("+CGATT=0");
+  modem.waitResponse(3000L);
+  modem.sendAT("+CGATT=1");
+  modem.waitResponse(10000L);
+
+  // --- Step 2: Disconnect any old GPRS session ---
+  Serial.println("[NET] Disconnecting previous GPRS session...");
+  modem.gprsDisconnect();
+  delay(1000);
   return true;
 }
 
@@ -247,6 +259,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
     Serial.printf("[OTA] Request queued: host=%s port=%d path=%s\n", otaHost.c_str(), otaPort, otaPath.c_str());
     otaRequested = true;
+    
+    LedBlink otaBlink = {CRGB::LightGreen, 250, 2, 250};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &otaBlink, 0);
+    delay(1000);
+    return;
 }
 
 
@@ -570,6 +587,9 @@ void networkTask(void *param) {
   const uint8_t MAX_CONNECTION_RETRIES = 5;
   const unsigned long CONNECTION_RETRY_DELAY = 30000UL;
 
+  unsigned long lastNetworkCheck = 0;
+  const unsigned long NETWORK_CHECK_INTERVAL = 60000; // 30 seconds
+
   Serial.println("[NET] Network task started");
 
   // ----- INITIALIZE MODEM + CONNECT -----
@@ -655,9 +675,8 @@ void networkTask(void *param) {
         Serial.println("[NET] networkTask self-deleting to hand control to otaTask");
         vTaskDelete(NULL); // delete network task (this function returns no further)
     }
-
-
     // =====================
+    
     // GSM/GPRS CONNECTION MANAGEMENT
     // =====================
     if (!modem.isGprsConnected()) {
@@ -1084,7 +1103,7 @@ void setup() {
   }
 
   // Initialize WDT for all tasks
-  esp_task_wdt_init(15, true);   // 🛡️ 15s timeout for all registered tasks 
+  esp_task_wdt_init(60, true);   // 🛡️ 60s timeout for all registered tasks 
   Serial.println("✅ WDT Initialized");
 
   ledQueue = xQueueCreate(10, sizeof(LedBlink));
