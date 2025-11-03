@@ -83,9 +83,12 @@ const char* mqttPass = "Secret!@#$1234";
 bool gsmConnected = false;
 
 // OTA server (default) - used when OTA command doesn't supply a URL
-// const char* otaHostDefault = "iot2.dma-bd.com";
-// const int otaPortDefault = 5000;
-// const char* otaPathDefault = "/download/MeshAC261025.bin";
+const char* otaHostDefault = "iot2.dma-bd.com";
+const int otaPortDefault = 5000;
+const char* otaPathDefault = "/download/MeshAC261025.bin";
+
+#define NETWORK_TASK_PRIORITY 3
+#define OTA_TASK_STACK_SIZE     (16 * 1024)
 
 
 // MQTT settings
@@ -97,6 +100,7 @@ char mqttSubTopic[64];
 #define MQTT_AC_SUB "DMA/MeshAC/SUB"
 #define MQTT_AC_ACK "DMA/MeshAC/ACK"
 #define MQTT_AC_TMP "DMA/MeshAC/TEMP"
+#define MQTT_OTA_PUB "DMA/MeshAC/OTA"
 
 // RS485 Serial2 Pins
 #define RS485_RX 27

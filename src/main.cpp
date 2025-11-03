@@ -5,7 +5,6 @@
 void networkTask(void *param); 
 void mainTask(void *param);
 void ledTask(void *param);
-void otaTask(void *param);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
@@ -27,8 +26,16 @@ SemaphoreHandle_t modemMutex;
 TaskHandle_t networkTaskHandle;
 TaskHandle_t mainTaskHandle;
 TaskHandle_t ledTaskHandle;
-// TaskHandle_t otaTaskHandle = NULL;
+
+TaskHandle_t otaTaskHandle = NULL;
 // TaskHandle_t wifiResetTaskHandle;
+
+// OTA control
+volatile bool otaRequested = false;
+String otaHost = otaHostDefault;
+int otaPort = otaPortDefault;
+String otaPath = otaPathDefault;
+volatile bool otaInProgress = false;
 
 //===============================
 // OTA Update Settings
@@ -195,6 +202,53 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   message.trim();           // Removes leading/trailing whitespace
   message.replace(" ", ""); // Removes all internal spaces
   Serial.println("📥 Message: " + message);
+
+  String m = message;
+  if (m == "update_firmware") {
+    // Optional: parse payload for host/path/port (very minimal parsing)
+    // Expect payload like: ota;http://host:port/path or {"host":"x","port":5000,"path":"/firm.bin"}
+    // We'll do a simple check for "http://" or a JSON parse fallback.
+    if (m.indexOf("http://") >= 0 || m.indexOf("https://") >= 0) {
+        // Very basic parse: extract host, optional :port, and path
+        int start = m.indexOf("http://");
+        if (start < 0) start = m.indexOf("https://");
+        String url = message.substring(start);
+        // remove protocol
+        if (url.startsWith("http://")) url = url.substring(7);
+        else if (url.startsWith("https://")) url = url.substring(8);
+        int slash = url.indexOf('/');
+        String hostport = (slash >= 0) ? url.substring(0, slash) : url;
+        String path = (slash >= 0) ? url.substring(slash) : "/";
+        int colon = hostport.indexOf(':');
+        if (colon >= 0) {
+            otaHost = hostport.substring(0, colon);
+            otaPort = hostport.substring(colon + 1).toInt();
+        } else {
+            otaHost = hostport;
+            otaPort = 80;
+        }
+        otaPath = path;
+    } else {
+        // Minimal JSON-ish parse: look for "path":"...". Not robust — adjust per your payload format.
+        int pIndex = message.indexOf("path");
+        if (pIndex >= 0) {
+            int quote1 = message.indexOf('"', pIndex);
+            int quote2 = message.indexOf('"', quote1 + 1);
+            int quote3 = message.indexOf('"', quote2 + 1);
+            int quote4 = message.indexOf('"', quote3 + 1);
+            if (quote3 >= 0 && quote4 > quote3) {
+                otaPath = message.substring(quote3 + 1, quote4);
+            }
+        }
+        // if no host provided, use defaults
+        otaHost = otaHostDefault;
+        otaPort = otaPortDefault;
+    }
+
+    Serial.printf("[OTA] Request queued: host=%s port=%d path=%s\n", otaHost.c_str(), otaPort, otaPath.c_str());
+    otaRequested = true;
+}
+
 
   // Check if the message is a ping
   if(message == "ping") {
@@ -531,6 +585,78 @@ void networkTask(void *param) {
   for (;;) {
     esp_task_wdt_reset();  // Feed watchdog
 
+    // If OTA requested, start shutdown & create otaTask
+    if (otaRequested && !otaInProgress) {
+        otaInProgress = true;
+        Serial.println("[NET] OTA requested - preparing for OTA");
+
+        leds[0] = CRGB::White;
+        FastLED.show();
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        // Publish ack
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Started");
+
+        // Stop MQTT gracefully
+        mqtt.disconnect();
+
+        // Stop GPRS data or keep modem powered for OTA (we need client)
+        // We'll keep modem powering, and reuse gsmClient in otaTask
+
+        // Remove WDT registrations for tasks we will delete
+        if (mainTaskHandle) {
+            esp_task_wdt_delete(mainTaskHandle);
+        }
+        
+        if (ledTaskHandle) {
+            esp_task_wdt_delete(ledTaskHandle);
+        }
+        
+        // delete mainTask
+        if (mainTaskHandle) {
+            vTaskDelete(mainTaskHandle);
+            mainTaskHandle = NULL;
+            Serial.println("[NET] mainTask deleted");
+        }
+        
+        if (ledTaskHandle) {
+            vTaskDelete(ledTaskHandle);
+            mainTaskHandle = NULL;
+            Serial.println("[NET] ledTask deleted");
+        }
+
+        // Create otaTask pinned to core 1 (or 0) - give it a larger stack
+        BaseType_t created = xTaskCreatePinnedToCore(
+            [](void*)->void {
+                // stub (real function defined below). This lambda placeholder shouldn't be used.
+                // We'll never call this lambda; create below with otaTask function pointer.
+                vTaskDelete(NULL);
+            },
+            "otaTask", OTA_TASK_STACK_SIZE, NULL, NETWORK_TASK_PRIORITY, &otaTaskHandle, 0
+        );
+        // The above lambda is just a placeholder to reserve handle; we'll delete it and create proper one
+        if (created == pdPASS) {
+            vTaskDelete(otaTaskHandle); // remove placeholder
+            otaTaskHandle = NULL;
+        }
+
+        // Proper creation using otaTask function below
+        extern void otaTask(void* pv);
+        if (xTaskCreatePinnedToCore(otaTask, "otaTask", OTA_TASK_STACK_SIZE, NULL, NETWORK_TASK_PRIORITY, &otaTaskHandle, 1) == pdPASS) {
+            Serial.println("[NET] otaTask created");
+        } else {
+            Serial.println("[NET] otaTask creation FAILED");
+            // Try to recover: reboot
+            ESP.restart();
+        }
+
+        // Remove networkTask from WDT and delete self (networkTask) to let otaTask take over
+        esp_task_wdt_delete(NULL);
+        Serial.println("[NET] networkTask self-deleting to hand control to otaTask");
+        vTaskDelete(NULL); // delete network task (this function returns no further)
+    }
+
+
     // =====================
     // GSM/GPRS CONNECTION MANAGEMENT
     // =====================
@@ -697,6 +823,186 @@ void ledTask(void *param) {
   }
 }
 
+
+
+void otaTask(void* pvParameters) {
+    Serial.println("[OTA] otaTask started");
+    // We will not register otaTask to WDT to avoid unwanted resets during long flash.
+    // If WDT enabled globally, ensure it won't kill this task:
+    // (We deliberately don't call esp_task_wdt_add for this task.)
+
+    // Ensure modem & GPRS connected (if networkTask gracefully kept modem up, this should be fine)
+    if (!modem.isGprsConnected()) {
+        Serial.println("[OTA] GPRS not connected, trying to connect...");
+        if (!connectToNetwork()) {
+            Serial.println("[OTA] Failed to connect to network - aborting OTA");
+            mqtt.publish(MQTT_OTA_PUB, "OTA_Failed_to_Connect");
+            otaRequested = false;
+            otaInProgress = false;
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            ESP.restart();
+        }
+    }
+
+    // Connect to OTA server
+    Serial.printf("[OTA] Connecting to %s:%d\n", otaHost.c_str(), otaPort);
+    if (!gsmClient.connect(otaHost.c_str(), otaPort)) {
+        Serial.println("[OTA] gsmClient.connect failed!");
+        // attempt to report via serial and reboot
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Failed_to_Connect_Server");
+        otaRequested = false;
+        otaInProgress = false;
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        ESP.restart();
+    }
+
+    // Send HTTP GET
+    String getReq = String("GET ") + otaPath + " HTTP/1.1\r\n" +
+                    "Host: " + otaHost + "\r\n" +
+                    "Connection: close\r\n\r\n";
+    gsmClient.print(getReq);
+    Serial.println("[OTA] HTTP GET sent, waiting for response...");
+
+    // wait for headers
+    unsigned long start = millis();
+    while (!gsmClient.available() && (millis() - start) < 10000) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (!gsmClient.available()) {
+        Serial.println("[OTA] No response from server");
+        mqtt.publish(MQTT_OTA_PUB, "OTA_No_Response_from_Server");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    // Parse HTTP response headers
+    int contentLength = -1;
+    bool isChunked = false;
+    bool httpOk = false;
+    while (gsmClient.available()) {
+        String line = gsmClient.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) break; // end headers
+        line.toLowerCase();
+        if (line.startsWith("http/1.1 200") || line.startsWith("http/1.0 200")) httpOk = true;
+        if (line.startsWith("content-length:")) {
+            contentLength = line.substring(15).toInt();
+            contentLength = atoi(line.substring(15).c_str());
+        }
+        if (line.startsWith("transfer-encoding:") && line.indexOf("chunked") >= 0) {
+            isChunked = true;
+        }
+    }
+
+    if (!httpOk) {
+        Serial.println("[OTA] HTTP not OK");
+        mqtt.publish(MQTT_OTA_PUB, "OTA_HTTP_Not_OK");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    if (isChunked) {
+        Serial.println("[OTA] Chunked transfer- not supported by this simple OTA (abort).");
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Chunked_Not_Supported");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    if (contentLength <= 0) {
+        Serial.println("[OTA] Invalid content length");
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Invalid_Content_Length");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    Serial.printf("[OTA] Content-Length: %d\n", contentLength);
+
+    // Start Update
+    if (!Update.begin(contentLength)) {
+        Serial.printf("[OTA] Update.begin failed: %s\n", Update.errorString());
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Update_Begin_Failed");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    // Read body and write to flash
+    uint8_t buf[1024];
+    int totalRead = 0;
+    while (totalRead < contentLength) {
+        int toRead = sizeof(buf);
+        if (contentLength - totalRead < toRead) toRead = contentLength - totalRead;
+        int r = gsmClient.readBytes(buf, toRead);
+        if (r <= 0) {
+            // wait a bit for more data (but not forever)
+            int waitCount = 0;
+            while (gsmClient.available() == 0 && waitCount++ < 50) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            if (gsmClient.available() == 0) {
+                Serial.println("[OTA] Read timeout");
+                Update.abort();
+                mqtt.publish(MQTT_OTA_PUB, "OTA_Read_Timeout");
+                otaRequested = false;
+                otaInProgress = false;
+                gsmClient.stop();
+                ESP.restart();
+            } else continue;
+        }
+        size_t written = Update.write(buf, r);
+        if (written != (size_t)r) {
+            Serial.printf("[OTA] Write mismatch: wrote %u expected %d\n", (unsigned)written, r);
+            Update.abort();
+            mqtt.publish(MQTT_OTA_PUB, "OTA_Write_Mismatch");
+            otaRequested = false;
+            otaInProgress = false;
+            gsmClient.stop();
+            ESP.restart();
+        }
+        totalRead += r;
+        float pct = (100.0 * totalRead) / contentLength;
+        Serial.printf("\r[OTA] Progress: %.1f%%", pct);
+    }
+    Serial.println();
+
+    // Finalize
+    if (!Update.end()) {
+        Serial.printf("[OTA] Update.end failed: %s\n", Update.errorString());
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Update_End_Failed");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    if (!Update.isFinished()) {
+        Serial.println("[OTA] Update not finished");
+        mqtt.publish(MQTT_OTA_PUB, "OTA_Update_Not_Finished");
+        otaRequested = false;
+        otaInProgress = false;
+        gsmClient.stop();
+        ESP.restart();
+    }
+
+    Serial.println("[OTA] Update successful - restarting...");
+    mqtt.publish(MQTT_OTA_PUB, "OTA_Update_Successful!!! Restarting");
+    delay(1500);
+    ESP.restart();
+
+    // Should never reach here
+    vTaskDelete(NULL);
+}
+
+
 // Function to check if it's the top of the hour
 void setup() {
   Serial.begin(115200);
@@ -790,7 +1096,7 @@ void setup() {
   Serial.println("✅ Gateway Ready to Works!");
 
   xTaskCreatePinnedToCore(ledTask, "LED Task", 2048, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(networkTask, "Network Task", 8 * 1024, NULL, 1, &networkTaskHandle, 0);
+  xTaskCreatePinnedToCore(networkTask, "Network Task", 8 * 1024, NULL, NETWORK_TASK_PRIORITY, &networkTaskHandle, 0);
   xTaskCreatePinnedToCore(mainTask, "Main Task", 8 * 1024, NULL, 1, &mainTaskHandle, 1);
 
 }
