@@ -4,8 +4,8 @@
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
-#define USE_ENERGY_METER
-#define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
+// #define USE_ENERGY_METER
+// #define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
 //#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
@@ -24,9 +24,11 @@
 #include <Preferences.h>
 #include <Update.h>
 
+#define CONFIG_TASK_WDT_DEBUG 1
+
 Preferences preferences;
 
-#define DEBUG_MODE true
+#define DEBUG_MODE false
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
 #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }

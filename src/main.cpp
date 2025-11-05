@@ -62,7 +62,8 @@ void powerCycleModem() {
   int waitTime = 0;
   while (!modem.testAT() && waitTime < 15000) {
     esp_task_wdt_reset();
-    vTaskDelay(pdMS_TO_TICKS(500));
+    // vTaskDelay(pdMS_TO_TICKS(500));
+    safeDelayMs(500);
     waitTime += 500;
   }
 }
@@ -109,7 +110,8 @@ bool connectToNetwork() {
       gsmConnected = false;
       return false;
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
+    // vTaskDelay(pdMS_TO_TICKS(500));
+    safeDelayMs(500);
   }
 
   // Try to connect to GPRS
@@ -121,7 +123,8 @@ bool connectToNetwork() {
       gsmConnected = false;
       return false;
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
+    // vTaskDelay(pdMS_TO_TICKS(500));
+    safeDelayMs(500);
   }
 
   Serial.println("[NET] ✅ Network connected");
@@ -151,9 +154,9 @@ String mqttStateToText(int state) {
 void reconnectMqtt() {
     static uint8_t mqttFailCount = 0;
     static unsigned long lastAttempt = 0;
-    static unsigned long retryInterval = 5000; // start 5 sec
+    static unsigned long retryInterval = 1000; // start 1 sec
     const unsigned long MAX_INTERVAL = 60000;
-    const uint8_t MAX_FAILS_BEFORE_RESTART = 10;
+    const uint8_t MAX_FAILS_BEFORE_RESTART = 20;
 
     if (!mqtt.connected() && modem.isGprsConnected()) {
         unsigned long now = millis();
@@ -177,6 +180,7 @@ void reconnectMqtt() {
             leds[0] = CRGB::Green; // indicate connected
             FastLED.show();
         } else {
+            esp_task_wdt_reset();
             mqttFailCount++;
             retryInterval = min(retryInterval * 2, MAX_INTERVAL); // exponential backoff
             Serial.printf("[MQTT] ❌ Connect failed (%d: %s) | Retry %d | Next attempt in %lus\n",
@@ -342,11 +346,11 @@ String generateMessageID() {
 // Callback function for receiving ESP-NOW messages
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   String msg((char*)incomingData, len);
-  Serial.println("\n📥 Received: " + msg);
+  DEBUG_PRINTLN("\n📥 Received: " + msg);
 
   int commaCount = std::count(msg.begin(), msg.end(), ',');
   if (commaCount != 4) {
-    Serial.println("❌ Invalid message format. Skipped.");
+    DEBUG_PRINTLN("❌ Invalid message format. Skipped.");
     return;
   }
 
@@ -363,19 +367,21 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   
   // 🔁 Deduplication for ALL types
   if (isDuplicate(type, msg_id)) {
-    Serial.println("⚠️ Duplicate " + type + " ignored (id=" + msg_id + ")");
+    DEBUG_PRINTLN("⚠️ Duplicate " + type + " ignored (id=" + msg_id + ")");
     return;
   }
 
   // Only process known types
   if (type != "ack" && type != "hb" && type != "tmp") {
-    Serial.println("⏭ Ignored unknown type: " + type);
+    DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
     return;
   }
 
-  Serial.printf("✅ %s Received: sender=%s → receiver=%s | cmd=%s | id=%s\n",
-                type.c_str(), sender_id.c_str(), receiver_id.c_str(),
-                command.c_str(), msg_id.c_str());
+  #if DEBUG_MODE
+    Serial.printf("✅ %s Received: sender=%s → receiver=%s | cmd=%s | id=%s\n",
+                  type.c_str(), sender_id.c_str(), receiver_id.c_str(),
+                  command.c_str(), msg_id.c_str());
+  #endif
 
   // Prepare MQTT message
   MqttMessage mqttMsg;
@@ -579,6 +585,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
 // NETWORK TASK CORE
 // =============================
 void networkTask(void *param) {
+  // esp_task_wdt_add(NULL);
   leds[0] = CRGB::Red;  // GSM not connected
   FastLED.show();
   ledState = false;
@@ -603,7 +610,7 @@ void networkTask(void *param) {
   MqttMessage msg;
 
   for (;;) {
-    esp_task_wdt_reset();  // Feed watchdog
+    // esp_task_wdt_reset();  // Feed watchdog
 
     // If OTA requested, start shutdown & create otaTask
     if (otaRequested && !otaInProgress) {
@@ -697,7 +704,7 @@ void networkTask(void *param) {
           // Non-blocking wait with WDT feeding
           uint32_t retryStart = millis();
           while (millis() - retryStart < CONNECTION_RETRY_DELAY) {
-            esp_task_wdt_reset();
+            // esp_task_wdt_reset();
             vTaskDelay(pdMS_TO_TICKS(100));
           }
 
@@ -729,7 +736,7 @@ void networkTask(void *param) {
       }
 
       mqtt.loop();  // process inbound/outbound packets
-      esp_task_wdt_reset();
+      // esp_task_wdt_reset();
 
       // Check for any message to publish
       if (xQueueReceive(mqttQueue, &msg, 0) == pdTRUE) {
@@ -751,7 +758,9 @@ void networkTask(void *param) {
 // MAIN TASK CORE
 // Main task to handle serial commands, heartbeat, and Modbus data
 void mainTask(void *param) {
+  esp_task_wdt_add(NULL);
   for (;;) {
+    esp_task_wdt_reset();
     // 📥 Serial command handler
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n');
@@ -818,32 +827,36 @@ void mainTask(void *param) {
   }
 }
 
-// LED task to handle blinking and status updates
+//LED Task to handle LED blinking based on messages from ledQueue
 void ledTask(void *param) {
-  LedBlink blink;
+    esp_task_wdt_add(NULL);  // register with WDT
+    LedBlink blink;
 
-  for (;;) {
-    if (xQueueReceive(ledQueue, &blink, portMAX_DELAY) == pdTRUE) {
-      for (int i = 0; i < blink.repeat; i++) {
-        leds[0] = blink.color;
-        FastLED.show();
-        vTaskDelay(pdMS_TO_TICKS(blink.duration));
+    for (;;) {
+        // Wait for a new blink message, but don't block forever
+        if (xQueueReceive(ledQueue, &blink, pdMS_TO_TICKS(100)) == pdTRUE) {
+            for (int i = 0; i < blink.repeat; i++) {
+                leds[0] = blink.color;
+                FastLED.show();
+                safeDelayMs(blink.duration);   // feed WDT inside safeDelayMs
 
-        leds[0] = CRGB::Black;  // turn off LED after blink
-        FastLED.show();
+                leds[0] = CRGB::Black;
+                FastLED.show();
 
-        if (i < blink.repeat - 1) {
-          vTaskDelay(pdMS_TO_TICKS(blink.gap));
+                if (i < blink.repeat - 1) {
+                    safeDelayMs(blink.gap);  // feed WDT inside safeDelayMs
+                }
+            }
+        } else {
+            // Queue empty, just feed WDT and yield
+            esp_task_wdt_reset();
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
-      }
     }
-
-    vTaskDelay(pdMS_TO_TICKS(10));  // just yield to keep watchdog happy
-  }
 }
+// =============================
 
-
-
+// OTA Task to handle over-the-air firmware updates
 void otaTask(void* pvParameters) {
     Serial.println("[OTA] otaTask started");
     // We will not register otaTask to WDT to avoid unwanted resets during long flash.
@@ -858,7 +871,8 @@ void otaTask(void* pvParameters) {
             mqtt.publish(MQTT_OTA_PUB, "OTA_Failed_to_Connect");
             otaRequested = false;
             otaInProgress = false;
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            // vTaskDelay(pdMS_TO_TICKS(2000));
+            safeDelayMs(2000);
             ESP.restart();
         }
     }
@@ -871,7 +885,8 @@ void otaTask(void* pvParameters) {
         mqtt.publish(MQTT_OTA_PUB, "OTA_Failed_to_Connect_Server");
         otaRequested = false;
         otaInProgress = false;
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        // vTaskDelay(pdMS_TO_TICKS(2000));
+        safeDelayMs(2000);
         ESP.restart();
     }
 
@@ -1020,7 +1035,7 @@ void otaTask(void* pvParameters) {
     // Should never reach here
     vTaskDelete(NULL);
 }
-
+// =============================
 
 // Function to check if it's the top of the hour
 void setup() {
@@ -1102,15 +1117,17 @@ void setup() {
     while (1); // Stop here if failed
   }
 
-  // Initialize WDT for all tasks
-  esp_task_wdt_init(60, true);   // 🛡️ 60s timeout for all registered tasks 
-  Serial.println("✅ WDT Initialized");
+
 
   ledQueue = xQueueCreate(10, sizeof(LedBlink));
   if (ledQueue == NULL) {
     Serial.println("❌ Failed to create ledQueue");
     while (true); // Stop here if failed
   }
+
+    // Initialize WDT for all tasks
+  esp_task_wdt_init(60, true);   // 🛡️ 60s timeout for all registered tasks 
+  Serial.println("✅ WDT Initialized");
 
   Serial.println("✅ Gateway Ready to Works!");
 
