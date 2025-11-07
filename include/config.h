@@ -28,7 +28,7 @@
 
 Preferences preferences;
 
-#define DEBUG_MODE false
+#define DEBUG_MODE true
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
 #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
@@ -103,6 +103,12 @@ char mqttSubTopic[64];
 #define MQTT_AC_ACK "DMA/MeshAC/ACK"
 #define MQTT_AC_TMP "DMA/MeshAC/TEMP"
 #define MQTT_OTA_PUB "DMA/MeshAC/OTA"
+
+#define MQTT_CHILLER_HB "DMA/Chiller/HB"
+#define MQTT_CHILLER_ACK "DMA/Chiller/ACK"
+#define MQTT_CHILLER_TMP "DMA/Chiller/TEMP"
+#define MQTT_CHILLER_ENERGY "DMA/Chiller/ENERGY"
+
 
 // RS485 Serial2 Pins
 #define RS485_RX 27

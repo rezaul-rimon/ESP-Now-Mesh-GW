@@ -372,7 +372,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   // Only process known types
-  if (type != "ack" && type != "hb" && type != "tmp") {
+  if (type != "ack" && type != "hb" && type != "tmp" && type != "energy" && type != "chiller_temp" && type != "chiller_ack" && type != "chiller_hb") {
     DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
     return;
   }
@@ -399,6 +399,27 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   } 
   else if (type == "tmp") {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_TMP);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  }
+
+  // Chiller message handling
+  else if( type == "energy") {
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ENERGY);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  }
+  else if(type == "chiller_temp"){
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_TMP);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+  }
+  else if(type == "chiller_ack"){
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ACK);
+    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
+
+    LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &ackBlink, 0);
+  }
+  else if(type == "chiller_hb"){
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_HB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
 
