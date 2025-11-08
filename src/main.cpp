@@ -10,7 +10,7 @@ void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
 bool isDuplicate(const String& msg_id);
-void powerCycleModem();
+// void powerCycleModem();
 bool initializeModem();
 bool connectToNetwork();
 
@@ -36,12 +36,64 @@ String otaHost = otaHostDefault;
 int otaPort = otaPortDefault;
 String otaPath = otaPathDefault;
 volatile bool otaInProgress = false;
-
-//===============================
-// OTA Update Settings
 //================================
 
-//================================
+
+// Sensor reading functions
+void writeRegister(uint8_t reg) {
+    Wire.beginTransmission(HDC1080_ADDR);
+    Wire.write(reg);
+    Wire.endTransmission();
+    }
+
+float readTemperature() {
+    writeRegister(0x00);  // Temperature register
+    delay(20);            // Wait for conversion (~15ms)
+    
+    Wire.requestFrom(HDC1080_ADDR, 2);
+    uint16_t raw = (Wire.read() << 8) | Wire.read();
+
+    // Convert raw data to Celsius (from datasheet)
+    return (raw / 65536.0) * 165.0 - 40.0;
+}
+
+float readHumidity() {
+    writeRegister(0x01);  // Humidity register
+    delay(20);            // Wait for conversion (~15ms)
+    
+    Wire.requestFrom(HDC1080_ADDR, 2);
+    uint16_t raw = (Wire.read() << 8) | Wire.read();
+
+    // Convert raw data to %RH (from datasheet)
+    return (raw / 65536.0) * 100.0;
+}
+
+float ldrToLux(int adc) {
+    // Known calibration points
+    const int ADC_vals[5] = {4048, 3800, 2096, 1966, 1600};
+    const float Lux_vals[5] = {961, 488, 16.67, 11.67, 10.83};
+
+    // If out of range
+    if(adc >= ADC_vals[0]) return Lux_vals[0];
+    if(adc <= ADC_vals[4]) return Lux_vals[4];
+
+    // Find which segment
+    for(int i=0; i<4; i++){
+        if(adc <= ADC_vals[i] && adc >= ADC_vals[i+1]){
+        float log_adc1 = log(ADC_vals[i]);
+        float log_adc2 = log(ADC_vals[i+1]);
+        float log_lux1 = log(Lux_vals[i]);
+        float log_lux2 = log(Lux_vals[i+1]);
+
+        float log_adc = log(adc);
+        float log_lux = log_lux1 + (log_lux2 - log_lux1) * (log_adc - log_adc1) / (log_adc2 - log_adc1);
+
+        return exp(log_lux);  // return interpolated Lux
+        }
+    }
+    return 0; // fallback
+}
+//==========================================================
 
 // Function to connect to GSM network
 // ---- Safe delay that feeds watchdog ----
@@ -70,7 +122,7 @@ void powerCycleModem() {
 
 // ---- Initialize the modem ----
 bool initializeModem() {
-  powerCycleModem();
+  // powerCycleModem();
 
   Serial.println("[NET] Restarting modem...");
   if (!modem.restart()) {
@@ -174,7 +226,7 @@ void reconnectMqtt() {
             retryInterval = 5000; // reset backoff
             Serial.println("[MQTT] ✅ Connected");
 
-            snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_AC_SUB, DEVICE_ID);
+            snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_MC_SUB, DEVICE_ID);
             mqtt.subscribe(mqttSubTopic);
 
             leds[0] = CRGB::Green; // indicate connected
@@ -218,6 +270,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   message.trim();           // Removes leading/trailing whitespace
   message.replace(" ", ""); // Removes all internal spaces
   Serial.println("📥 Message: " + message);
+  //=======================================
+  LedBlink mqttMsgBlink = {CRGB::Blue, 250, 1, 250};  // on_duraton, repeat, gap_duration
+  xQueueSend(ledQueue, &mqttMsgBlink, 0);
 
   String m = message;
   if (m == "update_firmware") {
@@ -276,7 +331,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Ping Arrived!");
     // Send back an ACK
     MqttMessage mqttMsg;
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,gsm_available", DEVICE_ID);
     xQueueSend(mqttQueue, &mqttMsg, 0);
     
@@ -372,7 +427,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   // Only process known types
-  if (type != "ack" && type != "hb" && type != "tmp" && type != "energy" && type != "chiller_temp" && type != "chiller_ack" && type != "chiller_hb") {
+  if (type != "smswt_hb" && type != "smswt_ack") {
     DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
     return;
   }
@@ -385,42 +440,19 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
 
   // Prepare MQTT message
   MqttMessage mqttMsg;
-  if (type == "ack") {
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-    
-    LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &ackBlink, 0);
-  } 
-  
-  else if (type == "hb") {
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_HB);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  } 
-  else if (type == "tmp") {
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_TMP);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  }
+ 
 
-  // Chiller message handling
-  else if( type == "energy") {
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ENERGY);
+  //Smart Switch MQTT Topics
+  if (type == "smswt_hb"){
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_HB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
-  else if(type == "chiller_temp"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_TMP);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  }
-  else if(type == "chiller_ack"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ACK);
+  else if (type == "smswt_ack"){
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
 
     LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
     xQueueSend(ledQueue, &ackBlink, 0);
-  }
-  else if(type == "chiller_hb"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_HB);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
 
   xQueueSend(mqttQueue, &mqttMsg, 0);
@@ -429,178 +461,6 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   // rebroadcastIfNeeded(msg_id, type, msg);
 }
 
-#ifdef USE_SELEC_MFM384
-  float readModbusData(uint16_t regAddress, uint8_t maxRetries) {
-    
-    delay(150);
-    while (maxRetries > 0) {
-      uint8_t result = node.readInputRegisters(regAddress, 2);
-      
-      if (result == node.ku8MBSuccess) {
-        uint16_t lowWord = node.getResponseBuffer(0);  // LSB stored in lower register
-        uint16_t highWord = node.getResponseBuffer(1); // MSB stored in higher register
-
-        union {
-          uint32_t intVal;
-          float floatVal;
-        } converter;
-
-        converter.intVal = ((uint32_t)highWord << 16) | lowWord;
-        Serial.printf("Modbus Read Success: Reg 0x%04X, Value: %.2f\n", regAddress, converter.floatVal);
-        return converter.floatVal; // Return value if read is successful
-      } else {
-        maxRetries--;
-        Serial.println("Modbus Read Error, Retrying...");
-        delay(100); // Optionally add a delay between retries
-      }
-    }
-    
-    // If all retries failed, return NaN to indicate an error
-    Serial.println("Modbus Read Failed after retries");
-    return NAN;
-  }
-
-#elif defined(USE_DZ81_DZS500)
-  // Function to read Modbus data from the RS485 slave
-  int readModbusData(uint16_t reg_address, uint8_t max_retries) {
-    vTaskDelay(pdMS_TO_TICKS(30));
-    int value = -1;
-    while (max_retries-- > 0) {
-      uint8_t result = node.readHoldingRegisters(reg_address, 1);
-      if (result == node.ku8MBSuccess) {
-        value = node.getResponseBuffer(0);
-        Serial.print("Modbus Read 0x");
-        Serial.print(reg_address, HEX);
-        Serial.print(": ");
-        Serial.println(value);
-        break;
-      }
-      vTaskDelay(pdMS_TO_TICKS(60));
-    }
-    return value;
-  }
-#endif
-
-#ifdef USE_SELEC_MFM384
-  // Getting Modbus Data
-  void getModbusData() {
-    // Read Modbus data with specific retry counts for each field
-    tNetEnergy = readModbusData(tNetEnergy_reg_addr, 2);       // Retry up to 3 times
-    tImpEnergy = readModbusData(tImpEnergy_reg_addr, 3);         // Retry up to 3 times
-    activePower = readModbusData(activePower_reg_addr, 2); // Retry up to 2 times
-    pAvolt = readModbusData(pAvolt_reg_addr, 1);         // Retry up to 1 times
-    pBvolt = readModbusData(pBvolt_reg_addr, 1);         // Retry up to 1 times
-    pCvolt = readModbusData(pCvolt_reg_addr, 1);         // Retry up to 2 times
-    lABvolt = readModbusData(lABvolt_reg_addr, 1);       // Retry up to 1 time
-    lBCvolt = readModbusData(lBCvolt_reg_addr, 1);       // Retry up to 1 time
-    lCAvolt = readModbusData(lCAvolt_reg_addr, 1);       // Retry up to 1 time
-    pAcurrent = readModbusData(pAcurrent_reg_addr, 1);   // Retry up to 2 times
-    pBcurrent = readModbusData(pBcurrent_reg_addr, 1);   // Retry up to 2 times
-    pCcurrent = readModbusData(pCcurrent_reg_addr, 1);   // Retry up to 2 times
-    frequency = readModbusData(frequency_reg_addr, 2);   // Retry up to 1 time
-    powerFactor = readModbusData(powerfactor_reg_addr, 2); // Retry up to 1 time
-  }
-#elif defined(USE_DZ81_DZS500)
-  // Function to initialize Modbus communication
-  void getModbusData(){
-    taeHigh     = readModbusData(taeHigh_reg_addr, 3);
-    taeLow      = readModbusData(taeLow_reg_addr, 3);
-    activePower = readModbusData(activePower_reg_addr, 2);
-    pAvolt      = readModbusData(pAvolt_reg_addr, 1);
-    pBvolt      = readModbusData(pBvolt_reg_addr, 1);
-    pCvolt      = readModbusData(pCvolt_reg_addr, 2);
-    lABvolt     = readModbusData(lABvolt_reg_addr, 1);
-    lBCvolt     = readModbusData(lBCvolt_reg_addr, 1);
-    lCAvolt     = readModbusData(lCAvolt_reg_addr, 1);
-    pAcurrent   = readModbusData(pAcurrent_reg_addr, 1);
-    pBcurrent   = readModbusData(pBcurrent_reg_addr, 1);
-    pCcurrent   = readModbusData(pCcurrent_reg_addr, 1);
-    frequency   = readModbusData(frequency_reg_addr, 1);
-    powerFactor = readModbusData(powerfactor_reg_addr, 1);
-
-    // Serial.println("--------- Modbus Data ---------");
-    // Serial.printf("taeHigh: %d\n", taeHigh);
-    // Serial.printf("taeLow: %d\n", taeLow);
-    // Serial.printf("Active Power: %d\n", activePower);
-    // Serial.printf("Phase A Voltage: %d\n", pAvolt);
-    // Serial.printf("Phase B Voltage: %d\n", pBvolt);
-    // Serial.printf("Phase C Voltage: %d\n", pCvolt);
-    // Serial.printf("Line AB Voltage: %d\n", lABvolt);
-    // Serial.printf("Line BC Voltage: %d\n", lBCvolt);
-    // Serial.printf("Line CA Voltage: %d\n", lCAvolt);
-    // Serial.printf("Phase A Current: %d\n", pAcurrent);
-    // Serial.printf("Phase B Current: %d\n", pBcurrent);
-    // Serial.printf("Phase C Current: %d\n", pCcurrent);
-    // Serial.printf("Frequency: %d Hz\n", frequency);
-    // Serial.printf("Power Factor: %d\n", powerFactor);
-    // Serial.println("--------------------------------");
-  }
-#endif
-
-#ifdef USE_SELEC_MFM384
-  // Parsing Modbus Data
-  void ParsingModbusData() {
-    // Format the data into the buffer with DEVICE_ID at the beginning
-    snprintf(em_data, sizeof(em_data), 
-            "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
-            DEVICE_ID,  // DEVICE_ID
-            tNetEnergy,
-            tImpEnergy,
-            activePower,
-            pAvolt,
-            pBvolt,
-            pCvolt,
-            lABvolt,
-            lBCvolt,
-            lCAvolt,
-            pAcurrent,
-            pBcurrent,
-            pCcurrent,
-            frequency,
-            powerFactor);
-  }
-#elif defined(USE_DZ81_DZS500)
-  // Function to parse Modbus data and prepare MQTT message
-  void ParsingModbusData() {
-    // Combine 32-bit energy register from taeHigh and taeLow
-    uint32_t totalEnergyRaw = ((uint32_t)taeHigh << 16) | (uint32_t)taeLow;
-
-    // Scale energy — assuming it's in 0.1 kWh units
-    float totaltNetEnergy = totalEnergyRaw * 0.1;
-    float tImpEnergy = totalEnergyRaw * 0.1;
-
-    // Apply proper scaling
-    float ap = activePower * 0.1;
-    float va = pAvolt * 0.1;
-    float vb = pBvolt * 0.1;
-    float vc = pCvolt * 0.1;
-    float vab = lABvolt * 0.1;
-    float vbc = lBCvolt * 0.1;
-    float vca = lCAvolt * 0.1;
-    float ia = pAcurrent * 0.1;
-    float ib = pBcurrent * 0.1;
-    float ic = pCcurrent * 0.1;
-    float freq = frequency * 0.01;
-    float pf = powerFactor * 0.001;
-
-    // Optional debug prints to verify scaling
-    // Serial.println("---- Scaled Values ----");
-    // Serial.printf("Energy: %.2f kWh, Power: %.2f W\n", totaltNetEnergy, ap);
-    // Serial.printf("Voltages: VA=%.2f, VB=%.2f, VC=%.2f, VAB=%.2f, VBC=%.2f, VCA=%.2f\n", va, vb, vc, vab, vbc, vca);
-    // Serial.printf("Currents: IA=%.2f, IB=%.2f, IC=%.2f\n", ia, ib, ic);
-    // Serial.printf("Frequency: %.2f Hz, PF: %.3f\n", freq, pf);
-
-    // Format the final MQTT message string
-    snprintf(em_data, sizeof(em_data),
-      "%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
-      DEVICE_ID,
-      totaltNetEnergy, tImpEnergy, ap,
-      va, vb, vc,
-      vab, vbc, vca,
-      ia, ib, ic,
-      freq, pf);
-  }
-#endif
 
 // =============================
 // NETWORK TASK CORE
@@ -808,14 +668,10 @@ void mainTask(void *param) {
     // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {
     lastHBPublishTime = millis();
-    bool acLineState = digitalRead(AC_LINE_PIN);
 
     MqttMessage hbMsg;
-    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_EM_HB);
-    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:0,G:1,C:%d,SD:%d",
-      DEVICE_ID,
-      acLineState ? 1 : 0,
-      USE_SD_CARD ? 1 : 0);
+    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_MC_HB);
+    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,wifi_connected", DEVICE_ID);
 
     xQueueSend(mqttQueue, &hbMsg, 0);
     
@@ -823,26 +679,69 @@ void mainTask(void *param) {
     xQueueSend(ledQueue, &hbBlink, 0);
   }
 
-  #if defined(USE_ENERGY_METER)
-    // 📊 Modbus Data via MQTT queue
-    if (millis() - lastDataPublishTime >= dataPublishInterval) {
-      lastDataPublishTime = millis();
+  //Data sending vial mqttQueue can be added here
+  if(millis() - lastDataPublishTime >= dataPublishInterval) {
+    lastDataPublishTime = millis();
+    float temp = readTemperature();
+    float hum = readHumidity();
 
-      getModbusData();         // Populate raw data
-      ParsingModbusData();     // Format to em_data
+    Serial.print("Temperature: ");
+    Serial.print(temp, 2);
+    Serial.print(" °C  |  Humidity: ");
+    Serial.print(hum, 2);
+    Serial.println(" %");
 
-      Serial.println("📤 Publishing Modbus Data....");
+    Serial.print("LDR Value: ");
+    int ldrValue = analogRead(LDR_PIN);
+    Serial.print(ldrValue);
+    Serial.println();
 
-      MqttMessage dataMsg;
-      snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_EM_PUB);
-      snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s", em_data);
+    float lux = ldrToLux(ldrValue);
+    lux = lux * 1.45; // Calibration factor
+    Serial.print("Calculated Lux: ");
+    Serial.print(lux, 2);
+    Serial.println(" lx");
 
-      xQueueSend(mqttQueue, &dataMsg, 0);
+    float adcValue = analogRead(NH3_PIN);
+    Serial.print("Ammonia Sensor ADC Value: ");
+    Serial.println(adcValue);
 
-      LedBlink dataBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
-      xQueueSend(ledQueue, &dataBlink, 0);
-    }
-  #endif
+    float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
+    Serial.print("RL Voltage: ");
+    Serial.print(voltageL, 3);
+    Serial.println(" V");
+
+    float voltageS = 3.3 - voltageL;
+    Serial.print("Rs Voltage: ");
+    Serial.print(voltageS, 3);
+    Serial.println(" V");
+
+    float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
+    Serial.print("Calculated Rs: ");
+    Serial.print(Rs, 2);
+    Serial.println(" Ohm");
+
+    float ratio = Rs / 10000.0; // RL = 10k Ohm
+    float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
+    Serial.print("Calculated Ammonia Concentration: ");
+    Serial.print(ppm, 2);
+    Serial.println(" ppm");
+
+    // Example: send dummy data
+    MqttMessage dataMsg;
+    snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
+    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
+            DEVICE_ID,
+            (temp >= 0) ? String(temp, 2).c_str() : "N/A",
+            (hum >= 0) ? String(hum, 2).c_str() : "N/A",
+            (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
+            (lux >= 0) ? String(lux, 2).c_str() : "N/A"
+      );
+    xQueueSend(mqttQueue, &dataMsg, 0);
+
+    LedBlink hbBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &hbBlink, 0);
+  }
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
@@ -1061,6 +960,7 @@ void otaTask(void* pvParameters) {
 // Function to check if it's the top of the hour
 void setup() {
   Serial.begin(115200);
+  Wire.begin(21, 22);  // SDA, SCL
 
   preferences.begin("device_data", false);  // Open Preferences (NVS)
   static String device_id; // Static variable to persist scope
@@ -1103,12 +1003,21 @@ void setup() {
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
 
+  Serial.println("\n✅ HDC1080 Temperature & Humidity Sensor Test");
+  // Configuration register: 14-bit temp + 14-bit humidity
+  Wire.beginTransmission(HDC1080_ADDR);
+  Wire.write(0x02);
+  Wire.write(0x10); // Bit7=0 Temp first, Bits[10:8]=000 (14-bit)
+  Wire.write(0x00);
+  Wire.endTransmission();
+  delay(15);
+
+  pinMode(LDR_PIN, INPUT);
+  pinMode(NH3_PIN, INPUT);
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);
   digitalWrite(MODEM_PWR, HIGH);
-
-  pinMode(AC_LINE_PIN, INPUT); // AC line detection pin
 
   mqtt.setServer(broker, MQTT_PORT);
   mqtt.setKeepAlive(60);
@@ -1129,16 +1038,11 @@ void setup() {
   esp_now_add_peer(&peerInfo);
   esp_now_register_recv_cb(onReceive);
 
-  Serial2.begin(9600, SERIAL_8N1, RS485_RX, RS485_TX);
-  node.begin(1, Serial2);
-
   mqttQueue = xQueueCreate(50, sizeof(MqttMessage));
   if (mqttQueue == NULL) {
     Serial.println("❌ Failed to create mqttQueue");
     while (1); // Stop here if failed
   }
-
-
 
   ledQueue = xQueueCreate(10, sizeof(LedBlink));
   if (ledQueue == NULL) {

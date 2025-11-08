@@ -4,16 +4,12 @@
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
-// #define USE_ENERGY_METER
-// #define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
-//#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
 #include <TinyGsmClient.h>
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
-#include <ModbusMaster.h>
 #include <WiFi.h>
 #include <esp_now.h>
 #include <deque>
@@ -23,6 +19,7 @@
 #include <FastLED.h>
 #include <Preferences.h>
 #include <Update.h>
+#include <Wire.h>
 
 #define CONFIG_TASK_WDT_DEBUG 1
 
@@ -37,10 +34,10 @@ Preferences preferences;
 #define CHANGE_DEICE_ID 0
 
 #if CHANGE_DEICE_ID
-    #define WORK_PACKAGE "1191"
-    #define GW_TYPE "03"
-    #define FIRMWARE_UPDATE_DATE "250616" 
-    #define DEVICE_SERIAL "0010"
+    #define WORK_PACKAGE "1178"
+    #define GW_TYPE "00"
+    #define FIRMWARE_UPDATE_DATE "251015" 
+    #define DEVICE_SERIAL "0099"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
@@ -64,10 +61,13 @@ bool snapshotSentThisHour = false;
 bool ledState = false;
 
 //FastLED library for controlling LEDs
-#define LED_PIN 4
+#define LED_PIN 27
 #define NUM_LEDS 1
 CRGB leds[NUM_LEDS];
-#define AC_LINE_PIN 34
+
+#define LDR_PIN 32 // Pin for LDR sensor
+#define NH3_PIN 34 // Pin for Ammonia sensor
+#define HDC1080_ADDR 0x40
 
 // GSM settings
 #define SerialAT Serial1
@@ -87,7 +87,7 @@ bool gsmConnected = false;
 // OTA server (default) - used when OTA command doesn't supply a URL
 const char* otaHostDefault = "iot2.dma-bd.com";
 const int otaPortDefault = 5000;
-const char* otaPathDefault = "/download/MeshAC261025.bin";
+const char* otaPathDefault = "/download/MC251015.bin";
 
 #define NETWORK_TASK_PRIORITY 3
 #define OTA_TASK_STACK_SIZE     (16 * 1024)
@@ -96,77 +96,13 @@ const char* otaPathDefault = "/download/MeshAC261025.bin";
 // MQTT settings
 char mqttSubTopic[64]; 
 #define MQTT_PORT 1883
-#define MQTT_EM_HB "DMA/EM/HB"
-#define MQTT_EM_PUB "DMA/EM/PUB"
-#define MQTT_AC_HB "DMA/MeshAC/HB"
-#define MQTT_AC_SUB "DMA/MeshAC/SUB"
-#define MQTT_AC_ACK "DMA/MeshAC/ACK"
-#define MQTT_AC_TMP "DMA/MeshAC/TEMP"
-#define MQTT_OTA_PUB "DMA/MeshAC/OTA"
+#define MQTT_MC_PUB "DMA/MC/PUB"
+#define MQTT_MC_SUB "DMA/MC/SUB"
+#define MQTT_MC_HB "DMA/MC/HB"
+#define MQTT_OTA_PUB "DMA/MC/OTA"
 
-#define MQTT_CHILLER_HB "DMA/Chiller/HB"
-#define MQTT_CHILLER_ACK "DMA/Chiller/ACK"
-#define MQTT_CHILLER_TMP "DMA/Chiller/TEMP"
-#define MQTT_CHILLER_ENERGY "DMA/Chiller/ENERGY"
-
-
-// RS485 Serial2 Pins
-#define RS485_RX 27
-#define RS485_TX 14
-
-#ifdef USE_SELEC_MFM384
-    // Modbus register addresses
-    #define tNetEnergy_reg_addr 0x3A
-    #define tImpEnergy_reg_addr 0x60
-    #define activePower_reg_addr 0x2A
-    #define pAvolt_reg_addr 0x00
-    #define pBvolt_reg_addr 0x02
-    #define pCvolt_reg_addr 0x04
-    #define lABvolt_reg_addr 0x08
-    #define lBCvolt_reg_addr 0x0A
-    #define lCAvolt_reg_addr 0x0C
-    #define pAcurrent_reg_addr 0x10
-    #define pBcurrent_reg_addr 0x12
-    #define pCcurrent_reg_addr 0x14
-    #define frequency_reg_addr 0x38
-    #define powerfactor_reg_addr 0x36
-
-#elif defined(USE_DZ81_DZS500)
-    // Modbus register addresses for 3-phase meter
-    #define taeHigh_reg_addr     0x30
-    #define taeLow_reg_addr      0x31
-    #define activePower_reg_addr 0x1A
-    #define pAvolt_reg_addr      0x14
-    #define pBvolt_reg_addr      0x15
-    #define pCvolt_reg_addr      0x16
-    #define lABvolt_reg_addr     0x17
-    #define lBCvolt_reg_addr     0x18
-    #define lCAvolt_reg_addr     0x19
-    #define pAcurrent_reg_addr   0x10
-    #define pBcurrent_reg_addr   0x11
-    #define pCcurrent_reg_addr   0x12
-    #define frequency_reg_addr   0x1E
-    #define powerfactor_reg_addr 0x1D
-#endif
-
-#ifdef USE_SELEC_MFM384
-    // Modbus data variables
-    float tNetEnergy, tImpEnergy, activePower;
-    float pAvolt, pBvolt, pCvolt;
-    float lABvolt, lBCvolt, lCAvolt;
-    float pAcurrent, pBcurrent, pCcurrent;
-    float frequency, powerFactor;
-#elif defined(USE_DZ81_DZS500)
-// Data variables
-    int taeHigh, taeLow, activePower;
-    int pAvolt, pBvolt, pCvolt;
-    int lABvolt, lBCvolt, lCAvolt;
-    int pAcurrent, pBcurrent, pCcurrent;
-    int frequency, powerFactor;
-#endif
-
-char em_data[128];
-ModbusMaster node;
+#define MQTT_SMARTSWITCH_HB "DMA/SmartSwitch/HB"
+#define MQTT_SMARTSWITCH_ACK "DMA/SmartSwitch/PUB"
 
 //Struct to hold message data
 #define MAX_MQTT_MSG_LEN 128
