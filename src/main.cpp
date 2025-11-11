@@ -762,6 +762,7 @@ void mainTask(void *param) {
   for (;;) {
     esp_task_wdt_reset();
     // 📥 Serial command handler
+    /*
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n');
       input.trim(); input.replace(" ", "");
@@ -783,6 +784,7 @@ void mainTask(void *param) {
         Serial.println("📤 CMD Sent: " + payload);
       }
     }
+    */
 
     // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {

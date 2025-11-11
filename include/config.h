@@ -4,8 +4,8 @@
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
-// #define USE_ENERGY_METER
-// #define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
+#define USE_ENERGY_METER
+#define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
 //#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
@@ -40,7 +40,7 @@ Preferences preferences;
     #define WORK_PACKAGE "1191"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "250616" 
-    #define DEVICE_SERIAL "0010"
+    #define DEVICE_SERIAL "0099"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
