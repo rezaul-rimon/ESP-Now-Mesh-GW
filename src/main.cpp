@@ -341,18 +341,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   //====================================
 
-  // Check for OTA update command
-  if (message == "update_firmware") {
-    Serial.println("Starting OTA Task...");
-    // if (otaTaskHandle == NULL) {
-    //   xTaskCreatePinnedToCore(otaTask, "OTA Task", 8*1024, NULL, 1, &otaTaskHandle, 1);
-    // } else {
-    //   Serial.println("OTA Task already running.");
-    // }
-  }
-  //====================================
-
-
   int commaIndex = message.indexOf(',');
   if (commaIndex < 0) {
     Serial.println("⚠️ Format: node_id,command");
@@ -643,6 +631,7 @@ void mainTask(void *param) {
   for (;;) {
     esp_task_wdt_reset();
     // 📥 Serial command handler
+    /*
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n');
       input.trim(); input.replace(" ", "");
@@ -664,6 +653,7 @@ void mainTask(void *param) {
         Serial.println("📤 CMD Sent: " + payload);
       }
     }
+    */
 
     // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {
