@@ -37,7 +37,7 @@ Preferences preferences;
     #define WORK_PACKAGE "1178"
     #define GW_TYPE "00"
     #define FIRMWARE_UPDATE_DATE "251015" 
-    #define DEVICE_SERIAL "0058"
+    #define DEVICE_SERIAL "0105"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
