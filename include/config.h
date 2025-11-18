@@ -37,10 +37,10 @@ Preferences preferences;
 #define CHANGE_DEICE_ID 0
 
 #if CHANGE_DEICE_ID
-    #define WORK_PACKAGE "1191"
+    #define WORK_PACKAGE "1263"
     #define GW_TYPE "03"
-    #define FIRMWARE_UPDATE_DATE "250616" 
-    #define DEVICE_SERIAL "0010"
+    #define FIRMWARE_UPDATE_DATE "251117" 
+    #define DEVICE_SERIAL "0099"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
@@ -48,7 +48,7 @@ const char* DEVICE_ID;
 
 
 
-const char* Local_ID = "gw0"; // Gateway ID
+const char* Local_ID = "gw2"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat
@@ -87,7 +87,7 @@ bool gsmConnected = false;
 // OTA server (default) - used when OTA command doesn't supply a URL
 const char* otaHostDefault = "iot2.dma-bd.com";
 const int otaPortDefault = 5000;
-const char* otaPathDefault = "/download/MeshAC261025.bin";
+const char* otaPathDefault = "/download/MeshChiller161125.bin";
 
 #define NETWORK_TASK_PRIORITY 3
 #define OTA_TASK_STACK_SIZE     (16 * 1024)
@@ -104,10 +104,10 @@ char mqttSubTopic[64];
 #define MQTT_AC_TMP "DMA/MeshAC/TEMP"
 #define MQTT_OTA_PUB "DMA/MeshAC/OTA"
 
-#define MQTT_CHILLER_HB "DMA/Chiller/HB"
-#define MQTT_CHILLER_ACK "DMA/Chiller/ACK"
-#define MQTT_CHILLER_TMP "DMA/Chiller/TEMP"
-#define MQTT_CHILLER_ENERGY "DMA/Chiller/ENERGY"
+#define MQTT_CHILLER_HB "DMA/CHILLER/HB"
+#define MQTT_CHILLER_ACK "DMA/CHILLER/ACK"
+#define MQTT_CHILLER_TMP "DMA/CHILLER/TEMP"
+#define MQTT_CHILLER_ENERGY "DMA/CHILLER/ENERGY"
 
 
 // RS485 Serial2 Pins

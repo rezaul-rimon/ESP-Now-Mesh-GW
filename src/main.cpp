@@ -132,7 +132,6 @@ bool connectToNetwork() {
   return true;
 }
 
-
 // ---- MQTT state text helper ----
 String mqttStateToText(int state) {
   switch (state) {
@@ -276,7 +275,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Ping Arrived!");
     // Send back an ACK
     MqttMessage mqttMsg;
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_AC_ACK);
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,gsm_available", DEVICE_ID);
     xQueueSend(mqttQueue, &mqttMsg, 0);
     
@@ -287,6 +286,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   //====================================
 
   // Check for OTA update command
+  /*
   if (message == "update_firmware") {
     Serial.println("Starting OTA Task...");
     // if (otaTaskHandle == NULL) {
@@ -295,6 +295,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     //   Serial.println("OTA Task already running.");
     // }
   }
+    */
   //====================================
 
 
@@ -372,7 +373,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   // Only process known types
-  if (type != "ack" && type != "hb" && type != "tmp" && type != "energy" && type != "chiller_temp" && type != "chiller_ack" && type != "chiller_hb") {
+  if (type != "ack" && type != "hb" && type != "tmp" && type != "c_em" && type != "c_tmp" && type != "c_ack" && type != "c_hb") {
     DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
     return;
   }
@@ -403,22 +404,22 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   // Chiller message handling
-  else if( type == "energy") {
+  else if (type == "c_em") {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ENERGY);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
-  else if(type == "chiller_temp"){
+  else if (type == "c_tmp"){
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_TMP);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
-  else if(type == "chiller_ack"){
+  else if (type == "c_ack"){
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
 
     LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
     xQueueSend(ledQueue, &ackBlink, 0);
   }
-  else if(type == "chiller_hb"){
+  else if (type == "c_hb"){
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_HB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
@@ -783,6 +784,7 @@ void mainTask(void *param) {
   for (;;) {
     esp_task_wdt_reset();
     // 📥 Serial command handler
+    /*
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n');
       input.trim(); input.replace(" ", "");
@@ -804,24 +806,26 @@ void mainTask(void *param) {
         Serial.println("📤 CMD Sent: " + payload);
       }
     }
+      */
+    // =============================
 
     // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {
-    lastHBPublishTime = millis();
-    bool acLineState = digitalRead(AC_LINE_PIN);
+      lastHBPublishTime = millis();
+      bool acLineState = digitalRead(AC_LINE_PIN);
 
-    MqttMessage hbMsg;
-    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_EM_HB);
-    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:0,G:1,C:%d,SD:%d",
-      DEVICE_ID,
-      acLineState ? 1 : 0,
-      USE_SD_CARD ? 1 : 0);
+      MqttMessage hbMsg;
+      snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_CHILLER_HB);
+      snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,W:0,G:1,C:%d,SD:%d",
+        DEVICE_ID,
+        acLineState ? 1 : 0,
+        USE_SD_CARD ? 1 : 0);
 
-    xQueueSend(mqttQueue, &hbMsg, 0);
-    
-    LedBlink hbBlink = {CRGB::Blue, 500, 2, 300};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &hbBlink, 0);
-  }
+      xQueueSend(mqttQueue, &hbMsg, 0);
+      
+      LedBlink hbBlink = {CRGB::Blue, 500, 2, 300};  // on_duraton, repeat, gap_duration
+      xQueueSend(ledQueue, &hbBlink, 0);
+    }
 
   #if defined(USE_ENERGY_METER)
     // 📊 Modbus Data via MQTT queue
