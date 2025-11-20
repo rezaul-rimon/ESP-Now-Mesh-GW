@@ -847,6 +847,47 @@ void mainTask(void *param) {
       xQueueSend(ledQueue, &dataBlink, 0);
     }
   #endif
+
+  // **RF Signal Handling with Debounce and Bit Length Check**
+  #ifdef USE_RCSWITCH
+    unsigned long now = millis();
+    if (mySwitch.available()) {
+      unsigned long receivedCode = mySwitch.getReceivedValue();
+      int bitLength = mySwitch.getReceivedBitlength(); // Get bit length of the received signal
+
+      // **Ignore signals that do not match the expected bit length (e.g., < 24 bits)**
+      if (bitLength < 24) {  
+        DEBUG_PRINTLN(String("Ignored RF Signal: ") + String(receivedCode) + " (Bits: " + String(bitLength) + ")");
+        mySwitch.resetAvailable();
+        continue;;
+      }
+
+      // **Short-Term Global Debounce (Ignore if received within 100ms)**
+      if (now - lastRFGlobalReceivedTime < 100) {
+        mySwitch.resetAvailable();
+        continue;
+      }
+
+      // **Per-Sensor Debounce (Ignore same sensor within 2 sec)**
+      if (lastRFReceivedTimeMap.find(receivedCode) == lastRFReceivedTimeMap.end() || 
+          (now - lastRFReceivedTimeMap[receivedCode] > 2000)) {  
+
+        lastRFReceivedTimeMap[receivedCode] = now;  // Update per-sensor time
+        lastRFGlobalReceivedTime = now;  // Update global debounce
+
+        // **Debug Output**
+        DEBUG_PRINTLN(String("Valid RF Received: ") + String(receivedCode) + " (Bits: " + String(bitLength) + ")");
+        
+        // **Send Data to MQTT**
+        // char data[50];
+        // snprintf(data, sizeof(data), "%s,%lu", DEVICE_ID, receivedCode);
+        // client.publish(mqtt_pub_topic, data);
+        // DEBUG_PRINTLN(String("Data Sent to MQTT: ") + String(data));
+      }
+
+      mySwitch.resetAvailable();
+    }
+  #endif
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
@@ -1107,6 +1148,9 @@ void setup() {
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
 
+  #ifdef USE_RCSWITCH
+    mySwitch.enableReceive(digitalPinToInterrupt(RF_PIN));
+  #endif
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);
@@ -1141,8 +1185,6 @@ void setup() {
     Serial.println("❌ Failed to create mqttQueue");
     while (1); // Stop here if failed
   }
-
-
 
   ledQueue = xQueueCreate(10, sizeof(LedBlink));
   if (ledQueue == NULL) {

@@ -4,9 +4,13 @@
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
-// #define USE_ENERGY_METER
-// #define USE_SELEC_MFM384 // Uncomment to use Selec MFM384 3-phase meter
-//#define USE_DZ81_DZS500 // Uncomment to use DZS500 3-phase meter
+#define USE_ENERGY_METER
+// #define USE_SELEC_MFM384 // 
+#define USE_DZ81_DZS500 // 
+
+#define CONFIG_TASK_WDT_DEBUG 1
+// #define USE_RCSWITCH // 
+//======================================
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
@@ -24,7 +28,19 @@
 #include <Preferences.h>
 #include <Update.h>
 
-#define CONFIG_TASK_WDT_DEBUG 1
+// Include RCSwitch library for RF communication
+#ifdef USE_RCSWITCH
+    #include <RCSwitch.h>
+    RCSwitch mySwitch = RCSwitch();
+
+    #include <map>
+    std::map<unsigned long, unsigned long> lastRFReceivedTimeMap;
+    unsigned long lastRFGlobalReceivedTime = 0;  // Global debounce
+
+    #define RF_PIN 26
+#endif
+//======================================
+
 
 Preferences preferences;
 
@@ -33,14 +49,14 @@ Preferences preferences;
 #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
-
-#define CHANGE_DEICE_ID 0
+//Device identification Settings
+#define CHANGE_DEICE_ID 1
 
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1263"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "251117" 
-    #define DEVICE_SERIAL "0099"
+    #define DEVICE_SERIAL "0098"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
@@ -53,7 +69,7 @@ uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 5 * 60 * 1000;
+const unsigned long dataPublishInterval = 1 * 30 * 1000;
 
 unsigned long lastHBPublishTime = 0;
 const unsigned long hbPublishInterval = 2 * 60 * 1000;
