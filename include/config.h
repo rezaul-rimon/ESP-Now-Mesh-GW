@@ -37,7 +37,7 @@ Preferences preferences;
     #define WORK_PACKAGE "1178"
     #define GW_TYPE "00"
     #define FIRMWARE_UPDATE_DATE "251015" 
-    #define DEVICE_SERIAL "0105"
+    #define DEVICE_SERIAL "0124"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
@@ -48,7 +48,7 @@ const char* DEVICE_ID;
 const char* Local_ID = "gw1"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-//Timers for publishing data and heartbeat
+//Timers for publishing dat/a and heartbeat
 unsigned long lastDataPublishTime = 0;
 const unsigned long dataPublishInterval = 5 * 60 * 1000;
 
