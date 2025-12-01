@@ -1,0 +1,151 @@
+#include <Arduino.h> 
+#include <HardwareSerial.h>
+
+// Define the serial connection for A7670
+HardwareSerial A7670(1);
+
+// MQTT Broker details
+const char* BROKER = "broker.dma-bd.com";  // Replace with your MQTT broker
+const int PORT = 1883;
+const char* CLIENT_ID = "ESP32_A7670";   // Change if needed
+const char* TOPIC = "esp32/status";      // Topic to publish to
+
+// Network details (replace with your credentials)
+const char* APN = "internet";
+const char* USER = "";                   // Leave empty if not needed
+const char* PASSWORD = "";               // Leave empty if not needed
+
+// Response buffer
+String response;
+
+void setup() {
+  // Initialize serial communications
+  Serial.begin(115200);
+  A7670.begin(115200, SERIAL_8N1, 16, 17);  // RX=16, TX=17
+
+  Serial.println("ESP32 + A7670 MQTT Client");
+  delay(2000);
+
+  // Initialize A7670 module
+  initializeA7670();
+  
+  // Connect to network
+  connectToNetwork();
+  
+  // Connect to MQTT broker
+  connectMQTT();
+  
+  // Publish message
+  publishMessage();
+}
+
+void loop() {
+  // Maintain connection and handle messages here
+  // Add your MQTT subscription handling if needed
+  delay(1000);
+}
+
+void initializeA7670() {
+  Serial.println("Initializing A7670...");
+  
+  sendATCommand("AT", "OK", 5000);
+  sendATCommand("ATE0", "OK", 5000);  // Echo off
+  sendATCommand("AT+CPIN?", "READY", 5000);
+  sendATCommand("AT+CSQ", "OK", 5000);
+  sendATCommand("AT+CGREG?", "1,1", 5000);  // Check network registration
+}
+
+void connectToNetwork() {
+  Serial.println("Connecting to network...");
+  
+  // Configure APN
+  String apnCommand = "AT+CGDCONT=1,\"IP\",\"" + String(APN) + "\"";
+  sendATCommand(apnCommand.c_str(), "OK", 10000);
+  
+  // Activate network connection
+  sendATCommand("AT+CNCFG=0,1,\"" + String(APN) + "\"", "OK", 10000);
+  
+  if(USER != "" && PASSWORD != "") {
+    sendATCommand("AT+CNCFG=0,1,\"" + String(APN) + "\",\"" + String(USER) + "\",\"" + String(PASSWORD) + "\"", "OK", 10000);
+  }
+  
+  sendATCommand("AT+CNACT=0,1", "OK", 30000);
+  
+  // Check IP address
+  sendATCommand("AT+CNACT?", "0,1", 5000);
+  
+  Serial.println("Network connected!");
+}
+
+void connectMQTT() {
+  Serial.println("Connecting to MQTT broker...");
+  
+  // Set MQTT version (3.1.1)
+  sendATCommand("AT+CMQTTVER=1", "OK", 5000);
+  
+  // Start MQTT service
+  sendATCommand("AT+CMQTTSTART", "OK", 10000);
+  
+  // Acquire client ID
+  String clientIdCmd = "AT+CMQTTACCQ=0,\"" + String(CLIENT_ID) + "\"";
+  sendATCommand(clientIdCmd.c_str(), "OK", 5000);
+  
+  // Set broker address and port
+  String brokerCmd = "AT+CMQTTCONNECT=0,\"TCP\",\"" + String(BROKER) + "\"," + String(PORT) + ",120,1";
+  sendATCommand(brokerCmd.c_str(), "OK", 30000);
+  
+  Serial.println("MQTT Connected!");
+}
+
+void publishMessage() {
+  Serial.println("Publishing message...");
+  
+  String message = "connected to mqtt";
+  
+  // Set topic
+  String topicCmd = "AT+CMQTTTOPIC=0," + String(String(TOPIC).length());
+  sendATCommand(topicCmd.c_str(), ">", 5000);
+  
+  // Send topic
+  sendATCommand(TOPIC, "OK", 5000);
+  
+  // Set payload
+  String payloadCmd = "AT+CMQTTPAYLOAD=0," + String(message.length());
+  sendATCommand(payloadCmd.c_str(), ">", 5000);
+  
+  // Send payload
+  sendATCommand(message.c_str(), "OK", 5000);
+  
+  // Publish
+  sendATCommand("AT+CMQTTPUB=0,1,60", "OK", 10000);
+  
+  Serial.println("Message published!");
+}
+
+bool sendATCommand(const char* command, const char* expectedResponse, unsigned long timeout) {
+  Serial.print("Sending: ");
+  Serial.println(command);
+  
+  A7670.println(command);
+  
+  unsigned long startTime = millis();
+  response = "";
+  
+  while (millis() - startTime < timeout) {
+    while (A7670.available()) {
+      char c = A7670.read();
+      response += c;
+      
+      if (response.indexOf(expectedResponse) >= 0) {
+        Serial.print("Response: ");
+        Serial.println(response);
+        return true;
+      }
+    }
+    delay(10);
+  }
+  
+  Serial.print("Timeout! Response: ");
+  Serial.println(response);
+  return false;
+}

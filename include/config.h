@@ -3,7 +3,16 @@
 #define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
+//======================================//
+
+// Project Configuration
 #define USE_SD_CARD false
+#define USE_FastLED
+#define USE_HDC1080_SENSOR
+#define USE_LDR_SENSOR
+#define USE_NH3_SENSOR
+
+//======================================//
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
@@ -25,25 +34,26 @@
 
 Preferences preferences;
 
+// Debugging macros
 #define DEBUG_MODE true
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
 #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
+//==========================================//
 
-
+//Device Configuration
 #define CHANGE_DEICE_ID 0
 
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1178"
     #define GW_TYPE "00"
     #define FIRMWARE_UPDATE_DATE "251015" 
-    #define DEVICE_SERIAL "0124"
+    #define DEVICE_SERIAL "0888"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
 const char* DEVICE_ID;
-
-
+//========================================//
 
 const char* Local_ID = "gw1"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -59,15 +69,29 @@ unsigned long lastHourCheck = 0;
 bool snapshotSentThisHour = false;
 
 bool ledState = false;
+//========================================//
 
 //FastLED library for controlling LEDs
-#define LED_PIN 27
-#define NUM_LEDS 1
-CRGB leds[NUM_LEDS];
+#ifdef USE_FastLED
+    #define LED_PIN 27
+    #define NUM_LEDS 1
+    CRGB leds[NUM_LEDS];
+#endif
+//========================================//
 
-#define LDR_PIN 32 // Pin for LDR sensor
-#define NH3_PIN 34 // Pin for Ammonia sensor
-#define HDC1080_ADDR 0x40
+// Sensor configuration
+#ifdef USE_LDR_SENSOR
+    #define LDR_PIN 32 // Pin for LDR sensor
+#endif
+
+#ifdef USE_NH3_SENSOR
+    #define NH3_PIN 34 // Pin for Ammonia sensor
+#endif
+
+#ifdef USE_HDC1080_SENSOR
+    #define HDC1080_ADDR 0x40
+#endif
+//========================================//
 
 // GSM settings
 #define SerialAT Serial1
@@ -83,6 +107,7 @@ const char* broker = "broker2.dma-bd.com";
 const char* mqttUser = "broker2";
 const char* mqttPass = "Secret!@#$1234";
 bool gsmConnected = false;
+//========================================//
 
 // OTA server (default) - used when OTA command doesn't supply a URL
 const char* otaHostDefault = "iot2.dma-bd.com";
@@ -91,6 +116,7 @@ const char* otaPathDefault = "/download/MC251015.bin";
 
 #define NETWORK_TASK_PRIORITY 3
 #define OTA_TASK_STACK_SIZE     (16 * 1024)
+//========================================//
 
 
 // MQTT settings

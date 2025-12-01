@@ -13,6 +13,8 @@ bool isDuplicate(const String& msg_id);
 // void powerCycleModem();
 bool initializeModem();
 bool connectToNetwork();
+void publishHeartbeat();
+void publishData();
 
 //Objects for GSM, MQTT, and ESP-NOW
 TinyGsm modem(SerialAT);
@@ -40,13 +42,14 @@ volatile bool otaInProgress = false;
 
 
 // Sensor reading functions
-void writeRegister(uint8_t reg) {
+#ifdef USE_HDC1080_SENSOR
+  void writeRegister(uint8_t reg) {
     Wire.beginTransmission(HDC1080_ADDR);
     Wire.write(reg);
     Wire.endTransmission();
-    }
+  }
 
-float readTemperature() {
+  float readTemperature() {
     writeRegister(0x00);  // Temperature register
     delay(20);            // Wait for conversion (~15ms)
     
@@ -55,9 +58,9 @@ float readTemperature() {
 
     // Convert raw data to Celsius (from datasheet)
     return (raw / 65536.0) * 165.0 - 40.0;
-}
+  }
 
-float readHumidity() {
+  float readHumidity() {
     writeRegister(0x01);  // Humidity register
     delay(20);            // Wait for conversion (~15ms)
     
@@ -66,9 +69,13 @@ float readHumidity() {
 
     // Convert raw data to %RH (from datasheet)
     return (raw / 65536.0) * 100.0;
-}
+  }
+#endif
+//==========================================================//
 
-float ldrToLux(int adc) {
+// LDR to Lux conversion function
+#ifdef USE_LDR_SENSOR
+  float ldrToLux(int adc) {
     // Known calibration points
     const int ADC_vals[5] = {4048, 3800, 2096, 1966, 1600};
     const float Lux_vals[5] = {961, 488, 16.67, 11.67, 10.83};
@@ -92,8 +99,93 @@ float ldrToLux(int adc) {
         }
     }
     return 0; // fallback
-}
+  }
+#endif
 //==========================================================
+
+// Function to publish heartbeat message
+void publishHeartbeat(){
+  MqttMessage hbMsg;
+  snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_MC_HB);
+  snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,wifi_connected", DEVICE_ID);
+
+  xQueueSend(mqttQueue, &hbMsg, 0);
+  
+  LedBlink hbBlink = {CRGB::Blue, 500, 2, 300};  // on_duraton, repeat, gap_duration
+  xQueueSend(ledQueue, &hbBlink, 0);
+}
+//========================================//
+
+// Function to publish sensor data
+void publishData(){
+  #ifdef USE_HDC1080_SENSOR
+      float temp = readTemperature();
+      float hum = readHumidity();
+
+      Serial.print("Temperature: ");
+      Serial.print(temp, 2);
+      Serial.print(" °C  |  Humidity: ");
+      Serial.print(hum, 2);
+      Serial.println(" %");
+    #endif
+
+    #ifdef USE_LDR_SENSOR
+      Serial.print("LDR Value: ");
+      int ldrValue = analogRead(LDR_PIN);
+      Serial.print(ldrValue);
+      Serial.println();
+
+      float lux = ldrToLux(ldrValue);
+      lux = lux * 1.45; // Calibration factor
+      Serial.print("Calculated Lux: ");
+      Serial.print(lux, 2);
+      Serial.println(" lx");
+    #endif
+
+    #ifdef USE_NH3_SENSOR
+      float adcValue = analogRead(NH3_PIN);
+      Serial.print("Ammonia Sensor ADC Value: ");
+      Serial.println(adcValue);
+
+      float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
+      Serial.print("RL Voltage: ");
+      Serial.print(voltageL, 3);
+      Serial.println(" V");
+
+      float voltageS = 3.3 - voltageL;
+      Serial.print("Rs Voltage: ");
+      Serial.print(voltageS, 3);
+      Serial.println(" V");
+
+      float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
+      Serial.print("Calculated Rs: ");
+      Serial.print(Rs, 2);
+      Serial.println(" Ohm");
+
+      float ratio = Rs / 10000.0; // RL = 10k Ohm
+      float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
+      Serial.print("Calculated Ammonia Concentration: ");
+      Serial.print(ppm, 2);
+      Serial.println(" ppm");
+    #endif
+
+    // Prepare and send MQTT data message
+    MqttMessage dataMsg;
+    snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
+    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
+            DEVICE_ID,
+            (temp >= 0) ? String(temp, 2).c_str() : "N/A",
+            (hum >= 0) ? String(hum, 2).c_str() : "N/A",
+            (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
+            (lux >= 0) ? String(lux, 2).c_str() : "N/A"
+      );
+    xQueueSend(mqttQueue, &dataMsg, 0);
+
+    LedBlink hbBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &hbBlink, 0);
+}
+//========================================//
+
 
 // Function to connect to GSM network
 // ---- Safe delay that feeds watchdog ----
@@ -104,6 +196,7 @@ void safeDelayMs(uint32_t ms) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
+//========================================//
 
 // ---- Power cycle the modem safely ----
 void powerCycleModem() {
@@ -119,6 +212,7 @@ void powerCycleModem() {
     waitTime += 500;
   }
 }
+//========================================//
 
 // ---- Initialize the modem ----
 bool initializeModem() {
@@ -131,6 +225,9 @@ bool initializeModem() {
   }
 
   Serial.println("[NET] ✅ Modem restarted successfully");
+
+  // modem.sendAT("+CFUN=0");
+  // modem.waitResponse(3000L);
 
   // --- Step 1: Force GPRS detach and reattach ---
   Serial.println("[NET] Resetting GPRS attachment...");
@@ -145,6 +242,7 @@ bool initializeModem() {
   delay(1000);
   return true;
 }
+//========================================//
 
 // ---- Connect to GSM + GPRS network safely ----
 bool connectToNetwork() {
@@ -183,7 +281,7 @@ bool connectToNetwork() {
   gsmConnected = true;
   return true;
 }
-
+//========================================//
 
 // ---- MQTT state text helper ----
 String mqttStateToText(int state) {
@@ -201,6 +299,7 @@ String mqttStateToText(int state) {
     default: return "Unknown";
   }
 }
+//========================================//
 
 // ---- MQTT reconnect with exponential backoff and ESP32 restart ----
 void reconnectMqtt() {
@@ -252,7 +351,7 @@ void reconnectMqtt() {
         }
     }
 }
-// -------------------- END MQTT HELPER --------------------
+//========================================//
 
 // Callback function for MQTT messages
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -362,6 +461,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
   // You can add command handling here if needed
 }
+//==========================================================//
 
 // Function to check for duplicate ACKs
 bool isDuplicate(const String& type, const String& msg_id) {
@@ -375,6 +475,7 @@ bool isDuplicate(const String& type, const String& msg_id) {
   }
   return false;
 }
+//========================================//
 
 // Function to generate a unique message ID
 String generateMessageID() {
@@ -385,6 +486,7 @@ String generateMessageID() {
   sprintf(id, "%04X", randNum);
   return String(id);
 }
+//========================================//
 
 // Callback function for receiving ESP-NOW messages
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
@@ -428,7 +530,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
 
   // Prepare MQTT message
   MqttMessage mqttMsg;
- 
+
 
   //Smart Switch MQTT Topics
   if (type == "smswt_hb"){
@@ -448,6 +550,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   // Re-broadcast if needed
   // rebroadcastIfNeeded(msg_id, type, msg);
 }
+//========================================//
 
 
 // =============================
@@ -622,6 +725,7 @@ void networkTask(void *param) {
     vTaskDelay(pdMS_TO_TICKS(250));  // Yield CPU, keep loop responsive
   }
 }
+//================================================================//
 
 // =============================
 // MAIN TASK CORE
@@ -658,84 +762,28 @@ void mainTask(void *param) {
     // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {
     lastHBPublishTime = millis();
+    //-----------------------------------//
 
-    MqttMessage hbMsg;
-    snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_MC_HB);
-    snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,wifi_connected", DEVICE_ID);
+    // Publish heartbeat
+    publishHeartbeat();
 
-    xQueueSend(mqttQueue, &hbMsg, 0);
     
-    LedBlink hbBlink = {CRGB::Blue, 500, 2, 300};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &hbBlink, 0);
   }
 
   //Data sending vial mqttQueue can be added here
   if(millis() - lastDataPublishTime >= dataPublishInterval) {
     lastDataPublishTime = millis();
-    float temp = readTemperature();
-    float hum = readHumidity();
+    //-----------------------------------//
 
-    Serial.print("Temperature: ");
-    Serial.print(temp, 2);
-    Serial.print(" °C  |  Humidity: ");
-    Serial.print(hum, 2);
-    Serial.println(" %");
+    // Publish data
+    publishData();
 
-    Serial.print("LDR Value: ");
-    int ldrValue = analogRead(LDR_PIN);
-    Serial.print(ldrValue);
-    Serial.println();
-
-    float lux = ldrToLux(ldrValue);
-    lux = lux * 1.45; // Calibration factor
-    Serial.print("Calculated Lux: ");
-    Serial.print(lux, 2);
-    Serial.println(" lx");
-
-    float adcValue = analogRead(NH3_PIN);
-    Serial.print("Ammonia Sensor ADC Value: ");
-    Serial.println(adcValue);
-
-    float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
-    Serial.print("RL Voltage: ");
-    Serial.print(voltageL, 3);
-    Serial.println(" V");
-
-    float voltageS = 3.3 - voltageL;
-    Serial.print("Rs Voltage: ");
-    Serial.print(voltageS, 3);
-    Serial.println(" V");
-
-    float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
-    Serial.print("Calculated Rs: ");
-    Serial.print(Rs, 2);
-    Serial.println(" Ohm");
-
-    float ratio = Rs / 10000.0; // RL = 10k Ohm
-    float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
-    Serial.print("Calculated Ammonia Concentration: ");
-    Serial.print(ppm, 2);
-    Serial.println(" ppm");
-
-    // Example: send dummy data
-    MqttMessage dataMsg;
-    snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
-    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
-            DEVICE_ID,
-            (temp >= 0) ? String(temp, 2).c_str() : "N/A",
-            (hum >= 0) ? String(hum, 2).c_str() : "N/A",
-            (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
-            (lux >= 0) ? String(lux, 2).c_str() : "N/A"
-      );
-    xQueueSend(mqttQueue, &dataMsg, 0);
-
-    LedBlink hbBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &hbBlink, 0);
   }
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
 }
+//=====================================================================//
 
 //LED Task to handle LED blinking based on messages from ledQueue
 void ledTask(void *param) {
@@ -764,7 +812,7 @@ void ledTask(void *param) {
         }
     }
 }
-// =============================
+//==================================================//
 
 // OTA Task to handle over-the-air firmware updates
 void otaTask(void* pvParameters) {
@@ -945,12 +993,11 @@ void otaTask(void* pvParameters) {
     // Should never reach here
     vTaskDelete(NULL);
 }
-// =============================
+// ================================================================
 
 // Function to check if it's the top of the hour
 void setup() {
   Serial.begin(115200);
-  Wire.begin(21, 22);  // SDA, SCL
 
   preferences.begin("device_data", false);  // Open Preferences (NVS)
   static String device_id; // Static variable to persist scope
@@ -976,31 +1023,37 @@ void setup() {
   
   // Serial.println("Gateway ID: " + String(DEVICE_ID));
 
-  FastLED.addLeds<NEOPIXEL,LED_PIN>(leds,NUM_LEDS);
-  
-  leds[0]=CRGB::Red; 
-  FastLED.show();
-  delay(250);
-  leds[0]=CRGB::Yellow;
-  FastLED.show();
-  delay(250);
-  leds[0]=CRGB::Blue;
-  FastLED.show();
-  delay(250);
-  leds[0]=CRGB::Black;
-  FastLED.show();
+  #ifdef USE_FastLED
+    FastLED.addLeds<NEOPIXEL,LED_PIN>(leds,NUM_LEDS);
+    leds[0]=CRGB::Red; 
+    FastLED.show();
+    delay(250);
+    leds[0]=CRGB::Yellow;
+    FastLED.show();
+    delay(250);
+    leds[0]=CRGB::Blue;
+    FastLED.show();
+    delay(250);
+    leds[0]=CRGB::Black;
+    FastLED.show();
+  #endif
+
   Serial.println("🔄 Starting Gateway...");
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
 
-  Serial.println("\n✅ HDC1080 Temperature & Humidity Sensor Test");
-  // Configuration register: 14-bit temp + 14-bit humidity
-  Wire.beginTransmission(HDC1080_ADDR);
-  Wire.write(0x02);
-  Wire.write(0x10); // Bit7=0 Temp first, Bits[10:8]=000 (14-bit)
-  Wire.write(0x00);
-  Wire.endTransmission();
-  delay(15);
+  #ifdef USE_HDC1080_SENSOR
+    Serial.println("🔄 Initializing HDC1080 Sensor...");
+    // Configuration register: 14-bit temp + 14-bit humidity
+    Wire.begin(21, 22);  // SDA, SCL
+    Wire.beginTransmission(HDC1080_ADDR);
+    Wire.write(0x02);
+    Wire.write(0x10); // Bit7=0 Temp first, Bits[10:8]=000 (14-bit)
+    Wire.write(0x00);
+    Wire.endTransmission();
+    delay(15);
+    Serial.println("\n✅ HDC1080 Temperature & Humidity Sensor Test");
+  #endif
 
   pinMode(LDR_PIN, INPUT);
   pinMode(NH3_PIN, INPUT);
