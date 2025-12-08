@@ -5,8 +5,8 @@
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
 #define USE_ENERGY_METER
-#define USE_SELEC_MFM384 // 
-// #define USE_DZ81_DZS500 // 
+// #define USE_SELEC_MFM384 // 
+#define USE_DZ81_DZS500 // 
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
@@ -34,13 +34,13 @@ Preferences preferences;
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
 
-#define CHANGE_DEICE_ID 0
+#define CHANGE_DEICE_ID 1
 
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1191"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "250616" 
-    #define DEVICE_SERIAL "0019"
+    #define DEVICE_SERIAL "0022"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
@@ -53,7 +53,7 @@ uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 5 * 60 * 1000;
+const unsigned long dataPublishInterval = 1 * 20 * 1000;
 
 unsigned long lastHBPublishTime = 0;
 const unsigned long hbPublishInterval = 2 * 60 * 1000;
