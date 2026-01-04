@@ -10,7 +10,7 @@ void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
 String generateMessageID();
 bool isDuplicate(const String& msg_id);
-// void powerCycleModem();
+void powerCycleModem();
 bool initializeModem();
 bool connectToNetwork();
 void publishHeartbeat();
@@ -28,9 +28,7 @@ SemaphoreHandle_t modemMutex;
 TaskHandle_t networkTaskHandle;
 TaskHandle_t mainTaskHandle;
 TaskHandle_t ledTaskHandle;
-
 TaskHandle_t otaTaskHandle = NULL;
-// TaskHandle_t wifiResetTaskHandle;
 
 // OTA control
 volatile bool otaRequested = false;
@@ -39,39 +37,6 @@ int otaPort = otaPortDefault;
 String otaPath = otaPathDefault;
 volatile bool otaInProgress = false;
 //================================
-
-
-// Sensor reading functions
-#ifdef USE_HDC1080_SENSOR
-  void writeRegister(uint8_t reg) {
-    Wire.beginTransmission(HDC1080_ADDR);
-    Wire.write(reg);
-    Wire.endTransmission();
-  }
-
-  float readTemperature() {
-    writeRegister(0x00);  // Temperature register
-    delay(20);            // Wait for conversion (~15ms)
-    
-    Wire.requestFrom(HDC1080_ADDR, 2);
-    uint16_t raw = (Wire.read() << 8) | Wire.read();
-
-    // Convert raw data to Celsius (from datasheet)
-    return (raw / 65536.0) * 165.0 - 40.0;
-  }
-
-  float readHumidity() {
-    writeRegister(0x01);  // Humidity register
-    delay(20);            // Wait for conversion (~15ms)
-    
-    Wire.requestFrom(HDC1080_ADDR, 2);
-    uint16_t raw = (Wire.read() << 8) | Wire.read();
-
-    // Convert raw data to %RH (from datasheet)
-    return (raw / 65536.0) * 100.0;
-  }
-#endif
-//==========================================================//
 
 // LDR to Lux conversion function
 #ifdef USE_LDR_SENSOR
@@ -118,17 +83,8 @@ void publishHeartbeat(){
 
 // Function to publish sensor data
 void publishData(){
-  #ifdef USE_HDC1080_SENSOR
-      float temp = readTemperature();
-      float hum = readHumidity();
-
-      Serial.print("Temperature: ");
-      Serial.print(temp, 2);
-      Serial.print(" °C  |  Humidity: ");
-      Serial.print(hum, 2);
-      Serial.println(" %");
-    #endif
-
+  
+    // Read LDR value and convert to Lux
     #ifdef USE_LDR_SENSOR
       Serial.print("LDR Value: ");
       int ldrValue = analogRead(LDR_PIN);
@@ -141,36 +97,28 @@ void publishData(){
       Serial.print(lux, 2);
       Serial.println(" lx");
     #endif
+    //========================================//
 
-    #ifdef USE_NH3_SENSOR
-      float adcValue = analogRead(NH3_PIN);
-      Serial.print("Ammonia Sensor ADC Value: ");
-      Serial.println(adcValue);
-
-      float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
-      Serial.print("RL Voltage: ");
-      Serial.print(voltageL, 3);
-      Serial.println(" V");
-
-      float voltageS = 3.3 - voltageL;
-      Serial.print("Rs Voltage: ");
-      Serial.print(voltageS, 3);
-      Serial.println(" V");
-
-      float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
-      Serial.print("Calculated Rs: ");
-      Serial.print(Rs, 2);
-      Serial.println(" Ohm");
-
-      float ratio = Rs / 10000.0; // RL = 10k Ohm
-      float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
-      Serial.print("Calculated Ammonia Concentration: ");
-      Serial.print(ppm, 2);
-      Serial.println(" ppm");
+    // Get light level from BH1750
+    #ifdef USE_GY30
+      float lux = -1;
+      if (lightMeter.measurementReady()) {
+        lux = lightMeter.readLightLevel();
+        Serial.print("BH1750 Light Level: ");
+        Serial.print(lux, 2);
+        Serial.println(" lx");
+      } else {
+        Serial.println("BH1750 Measurement not ready");
+      }
     #endif
+    //========================================//
 
     // Prepare and send MQTT data message
     MqttMessage dataMsg;
+    float temp = -1;
+    float hum = -1;
+    float ppm = -1;
+
     snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
     snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
             DEVICE_ID,
@@ -216,7 +164,7 @@ void powerCycleModem() {
 
 // ---- Initialize the modem ----
 bool initializeModem() {
-  // powerCycleModem();
+  powerCycleModem();
 
   Serial.println("[NET] Restarting modem...");
   if (!modem.restart()) {
@@ -1002,6 +950,7 @@ void setup() {
   preferences.begin("device_data", false);  // Open Preferences (NVS)
   static String device_id; // Static variable to persist scope
   
+  //Device ID Management
   #if CHANGE_DEICE_ID
     // Construct new device ID
     device_id = String(WORK_PACKAGE) + GW_TYPE + FIRMWARE_UPDATE_DATE + DEVICE_SERIAL;
@@ -1014,9 +963,10 @@ void setup() {
     device_id = preferences.getString("device_id", "UNKNOWN");
     Serial.println("Restored Device ID from Preferences: " + device_id);
   #endif
-
+  //=========================================//
+  
   DEVICE_ID = device_id.c_str(); // Assign to global pointer
-
+  
   preferences.end();
 
   //=========================================
@@ -1042,21 +992,24 @@ void setup() {
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
 
-  #ifdef USE_HDC1080_SENSOR
-    Serial.println("🔄 Initializing HDC1080 Sensor...");
-    // Configuration register: 14-bit temp + 14-bit humidity
-    Wire.begin(21, 22);  // SDA, SCL
-    Wire.beginTransmission(HDC1080_ADDR);
-    Wire.write(0x02);
-    Wire.write(0x10); // Bit7=0 Temp first, Bits[10:8]=000 (14-bit)
-    Wire.write(0x00);
-    Wire.endTransmission();
-    delay(15);
-    Serial.println("\n✅ HDC1080 Temperature & Humidity Sensor Test");
+  // ---- LDR SENSOR SETUP ----
+  #ifdef USE_LDR_SENSOR
+    Serial.println("🔄 Initializing LDR Sensor...");
+    pinMode(LDR_PIN, INPUT);
+    Serial.println("\n✅ LDR Sensor Test");
   #endif
 
-  pinMode(LDR_PIN, INPUT);
-  pinMode(NH3_PIN, INPUT);
+  #ifdef USE_GY30
+    // Initialize I2C
+    Wire.begin();
+    // Initialize BH1750 (default address 0x23)
+    if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+        Serial.println("✅BH1750 initialized successfully");
+    } else {
+        Serial.println("❌Error initializing BH1750");
+    }
+  #endif
+  //========================================//
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);

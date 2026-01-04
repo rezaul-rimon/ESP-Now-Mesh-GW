@@ -5,13 +5,11 @@
 #define TINY_GSM_USE_WIFI false
 //======================================//
 
-// Project Configuration
-#define USE_SD_CARD false
+// === Project Configuration === //
+// #define USE_SD_CARD
 #define USE_FastLED
-#define USE_HDC1080_SENSOR
-#define USE_LDR_SENSOR
-#define USE_NH3_SENSOR
-
+// #define USE_LDR_SENSOR
+#define USE_GY30
 //======================================//
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
@@ -46,10 +44,9 @@ Preferences preferences;
 
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1178"
-    #define GW_TYPE "00"
-    #define FIRMWARE_UPDATE_DATE "251015" 
-    #define DEVICE_SERIAL "0888"
-    //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
+    #define GW_TYPE "03"
+    #define FIRMWARE_UPDATE_DATE "260104" 
+    #define DEVICE_SERIAL "0055"
 #endif
 
 const char* DEVICE_ID;
@@ -73,7 +70,7 @@ bool ledState = false;
 
 //FastLED library for controlling LEDs
 #ifdef USE_FastLED
-    #define LED_PIN 27
+    #define LED_PIN 4
     #define NUM_LEDS 1
     CRGB leds[NUM_LEDS];
 #endif
@@ -84,12 +81,9 @@ bool ledState = false;
     #define LDR_PIN 32 // Pin for LDR sensor
 #endif
 
-#ifdef USE_NH3_SENSOR
-    #define NH3_PIN 34 // Pin for Ammonia sensor
-#endif
-
-#ifdef USE_HDC1080_SENSOR
-    #define HDC1080_ADDR 0x40
+#ifdef USE_GY30
+    #include <BH1750.h>
+    BH1750 lightMeter(0x23);
 #endif
 //========================================//
 
