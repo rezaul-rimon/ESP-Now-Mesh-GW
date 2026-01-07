@@ -39,7 +39,7 @@ Preferences preferences;
     #define WORK_PACKAGE "1180"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "260107" 
-    #define DEVICE_SERIAL "0009"
+    #define DEVICE_SERIAL "0099"
 #endif
 
 const char* DEVICE_ID;
@@ -58,7 +58,7 @@ bool ledState = false;
 
 //FastLED library for controlling LEDs
 #ifdef USE_FastLED
-    #define LED_PIN 4
+    #define LED_PIN 27
     #define NUM_LEDS 1
     CRGB leds[NUM_LEDS];
 #endif
