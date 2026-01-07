@@ -8,8 +8,6 @@
 // === Project Configuration === //
 // #define USE_SD_CARD
 #define USE_FastLED
-// #define USE_LDR_SENSOR
-#define USE_GY30
 //======================================//
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
@@ -17,16 +15,11 @@
 #include <TinyGsmClient.h>
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
-#include <WiFi.h>
-#include <esp_now.h>
-#include <deque>
-#include <algorithm>
 #include <freertos/FreeRTOS.h>
 #include <esp_task_wdt.h>
 #include <FastLED.h>
 #include <Preferences.h>
 #include <Update.h>
-#include <Wire.h>
 
 #define CONFIG_TASK_WDT_DEBUG 1
 
@@ -43,17 +36,15 @@ Preferences preferences;
 #define CHANGE_DEICE_ID 0
 
 #if CHANGE_DEICE_ID
-    #define WORK_PACKAGE "1178"
+    #define WORK_PACKAGE "1180"
     #define GW_TYPE "03"
-    #define FIRMWARE_UPDATE_DATE "260104" 
-    #define DEVICE_SERIAL "0055"
+    #define FIRMWARE_UPDATE_DATE "260107" 
+    #define DEVICE_SERIAL "0009"
 #endif
 
 const char* DEVICE_ID;
 //========================================//
 
-const char* Local_ID = "gw1"; // Gateway ID
-uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing dat/a and heartbeat
 unsigned long lastDataPublishTime = 0;
@@ -61,9 +52,6 @@ const unsigned long dataPublishInterval = 5 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
 const unsigned long hbPublishInterval = 2 * 60 * 1000;
-
-unsigned long lastHourCheck = 0;
-bool snapshotSentThisHour = false;
 
 bool ledState = false;
 //========================================//
@@ -76,16 +64,6 @@ bool ledState = false;
 #endif
 //========================================//
 
-// Sensor configuration
-#ifdef USE_LDR_SENSOR
-    #define LDR_PIN 32 // Pin for LDR sensor
-#endif
-
-#ifdef USE_GY30
-    #include <BH1750.h>
-    BH1750 lightMeter(0x23);
-#endif
-//========================================//
 
 // GSM settings
 #define SerialAT Serial1
@@ -116,13 +94,10 @@ const char* otaPathDefault = "/download/MC251015.bin";
 // MQTT settings
 char mqttSubTopic[64]; 
 #define MQTT_PORT 1883
-#define MQTT_MC_PUB "DMA/MC/PUB"
-#define MQTT_MC_SUB "DMA/MC/SUB"
-#define MQTT_MC_HB "DMA/MC/HB"
-#define MQTT_OTA_PUB "DMA/MC/OTA"
-
-#define MQTT_SMARTSWITCH_HB "DMA/SmartSwitch/HB"
-#define MQTT_SMARTSWITCH_ACK "DMA/SmartSwitch/PUB"
+#define MQTT_MC_PUB "DMA/A7670/PUB"
+#define MQTT_MC_SUB "DMA/A7670/SUB"
+#define MQTT_MC_HB "DMA/A7670/HB"
+#define MQTT_OTA_PUB "DMA/A7670/OTA"
 
 //Struct to hold message data
 #define MAX_MQTT_MSG_LEN 128
@@ -133,13 +108,6 @@ typedef struct {
     char payload[MAX_MQTT_MSG_LEN];
 } MqttMessage;
 
-struct Message {
-    String sender_id;
-    String receiver_id;
-    String command;
-    String type;
-    String msg_id;
-};
 
 typedef struct {
     CRGB color;
@@ -147,7 +115,4 @@ typedef struct {
     uint8_t repeat;     // number of times to blink
     uint16_t gap;       // optional gap between blinks
 } LedBlink;
-
-
-std::deque<String> recentMsgKeys;
-const size_t maxRecentIDs = 20;
+//========================================//

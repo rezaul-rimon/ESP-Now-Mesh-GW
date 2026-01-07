@@ -1,4 +1,3 @@
-// ✅ GATEWAY CODE (ESP-NOW CMD SENDER + ACK RECEIVER)
 #include <config.h>
 
 //Function prototypes
@@ -8,8 +7,6 @@ void ledTask(void *param);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void reconnectMqtt();
 void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
-String generateMessageID();
-bool isDuplicate(const String& msg_id);
 void powerCycleModem();
 bool initializeModem();
 bool connectToNetwork();
@@ -38,35 +35,6 @@ String otaPath = otaPathDefault;
 volatile bool otaInProgress = false;
 //================================
 
-// LDR to Lux conversion function
-#ifdef USE_LDR_SENSOR
-  float ldrToLux(int adc) {
-    // Known calibration points
-    const int ADC_vals[5] = {4048, 3800, 2096, 1966, 1600};
-    const float Lux_vals[5] = {961, 488, 16.67, 11.67, 10.83};
-
-    // If out of range
-    if(adc >= ADC_vals[0]) return Lux_vals[0];
-    if(adc <= ADC_vals[4]) return Lux_vals[4];
-
-    // Find which segment
-    for(int i=0; i<4; i++){
-        if(adc <= ADC_vals[i] && adc >= ADC_vals[i+1]){
-        float log_adc1 = log(ADC_vals[i]);
-        float log_adc2 = log(ADC_vals[i+1]);
-        float log_lux1 = log(Lux_vals[i]);
-        float log_lux2 = log(Lux_vals[i+1]);
-
-        float log_adc = log(adc);
-        float log_lux = log_lux1 + (log_lux2 - log_lux1) * (log_adc - log_adc1) / (log_adc2 - log_adc1);
-
-        return exp(log_lux);  // return interpolated Lux
-        }
-    }
-    return 0; // fallback
-  }
-#endif
-//==========================================================
 
 // Function to publish heartbeat message
 void publishHeartbeat(){
@@ -83,49 +51,12 @@ void publishHeartbeat(){
 
 // Function to publish sensor data
 void publishData(){
-  
-    // Read LDR value and convert to Lux
-    #ifdef USE_LDR_SENSOR
-      Serial.print("LDR Value: ");
-      int ldrValue = analogRead(LDR_PIN);
-      Serial.print(ldrValue);
-      Serial.println();
-
-      float lux = ldrToLux(ldrValue);
-      lux = lux * 1.45; // Calibration factor
-      Serial.print("Calculated Lux: ");
-      Serial.print(lux, 2);
-      Serial.println(" lx");
-    #endif
-    //========================================//
-
-    // Get light level from BH1750
-    #ifdef USE_GY30
-      float lux = -1;
-      if (lightMeter.measurementReady()) {
-        lux = lightMeter.readLightLevel();
-        Serial.print("BH1750 Light Level: ");
-        Serial.print(lux, 2);
-        Serial.println(" lx");
-      } else {
-        Serial.println("BH1750 Measurement not ready");
-      }
-    #endif
-    //========================================//
-
     // Prepare and send MQTT data message
     MqttMessage dataMsg;
-    float temp = -1;
-    float hum = -1;
-    float ppm = -1;
-
     snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
-    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
+    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s",
             DEVICE_ID,
-            (temp >= 0) ? String(temp, 2).c_str() : "N/A",
-            (hum >= 0) ? String(hum, 2).c_str() : "N/A",
-            (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
-            (lux >= 0) ? String(lux, 2).c_str() : "N/A"
+            "I am Dummy Data!"
       );
     xQueueSend(mqttQueue, &dataMsg, 0);
 
@@ -156,6 +87,7 @@ void powerCycleModem() {
   while (!modem.testAT() && waitTime < 15000) {
     esp_task_wdt_reset();
     // vTaskDelay(pdMS_TO_TICKS(500));
+    Serial.println("[NET] Waiting for modem to respond to AT...");
     safeDelayMs(500);
     waitTime += 500;
   }
@@ -263,7 +195,7 @@ void reconnectMqtt() {
         lastAttempt = now;
 
         char clientId[32];
-        snprintf(clientId, sizeof(clientId), "MeshAC_%04X%04X%04X",
+        snprintf(clientId, sizeof(clientId), "A7670_%04X%04X%04X",
                   random(0xFFFF), random(0xFFFF), random(0xFFFF));
 
         Serial.printf("[%lu ms] [MQTT] Connecting as client ID: %s\n", millis(), clientId);
@@ -370,7 +302,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     xQueueSend(ledQueue, &otaBlink, 0);
     delay(1000);
     return;
-}
+  }
 
 
   // Check if the message is a ping
@@ -388,117 +320,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   //====================================
 
-  int commaIndex = message.indexOf(',');
-  if (commaIndex < 0) {
-    Serial.println("⚠️ Format: node_id,command");
-    LedBlink cmdErrorBlink = {CRGB::Orange, 150, 2, 150};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &cmdErrorBlink, 0);
-    return;
-  }
-
-  Message msg;
-  msg.sender_id = Local_ID;
-  msg.receiver_id = message.substring(0, commaIndex);
-  msg.command = message.substring(commaIndex + 1);
-  msg.type = "cmd";
-  msg.msg_id = generateMessageID();
-
-  String payload2 = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
-  esp_now_send(broadcastAddress, (uint8_t*)payload2.c_str(), payload2.length());
-  Serial.println("📤 CMD Sent: " + payload2);
-
   // You can add command handling here if needed
 }
 //==========================================================//
-
-// Function to check for duplicate ACKs
-bool isDuplicate(const String& type, const String& msg_id) {
-  String key = type + ":" + msg_id;
-  if (std::find(recentMsgKeys.begin(), recentMsgKeys.end(), key) != recentMsgKeys.end()) {
-    return true;
-  }
-  recentMsgKeys.push_back(key);
-  if (recentMsgKeys.size() > maxRecentIDs) {
-    recentMsgKeys.pop_front();
-  }
-  return false;
-}
-//========================================//
-
-// Function to generate a unique message ID
-String generateMessageID() {
-  uint16_t randNum = esp_random() & 0xFFFF;
-  // Serial.print("Raw 16-bit randNum: ");
-  // Serial.println(randNum);
-  char id[5];
-  sprintf(id, "%04X", randNum);
-  return String(id);
-}
-//========================================//
-
-// Callback function for receiving ESP-NOW messages
-void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
-  String msg((char*)incomingData, len);
-  DEBUG_PRINTLN("\n📥 Received: " + msg);
-
-  int commaCount = std::count(msg.begin(), msg.end(), ',');
-  if (commaCount != 4) {
-    DEBUG_PRINTLN("❌ Invalid message format. Skipped.");
-    return;
-  }
-
-  int idx1 = msg.indexOf(',');
-  int idx2 = msg.indexOf(',', idx1 + 1);
-  int idx3 = msg.indexOf(',', idx2 + 1);
-  int idx4 = msg.indexOf(',', idx3 + 1);
-
-  String sender_id   = msg.substring(0, idx1);
-  String receiver_id = msg.substring(idx1 + 1, idx2);
-  String command     = msg.substring(idx2 + 1, idx3);
-  String type        = msg.substring(idx3 + 1, idx4);
-  String msg_id      = msg.substring(idx4 + 1);
-  
-  // 🔁 Deduplication for ALL types
-  if (isDuplicate(type, msg_id)) {
-    DEBUG_PRINTLN("⚠️ Duplicate " + type + " ignored (id=" + msg_id + ")");
-    return;
-  }
-
-  // Only process known types
-  if (type != "smswt_hb" && type != "smswt_ack") {
-    DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
-    return;
-  }
-
-  #if DEBUG_MODE
-    Serial.printf("✅ %s Received: sender=%s → receiver=%s | cmd=%s | id=%s\n",
-                  type.c_str(), sender_id.c_str(), receiver_id.c_str(),
-                  command.c_str(), msg_id.c_str());
-  #endif
-
-  // Prepare MQTT message
-  MqttMessage mqttMsg;
-
-
-  //Smart Switch MQTT Topics
-  if (type == "smswt_hb"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_HB);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  }
-  else if (type == "smswt_ack"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_ACK);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-
-    LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &ackBlink, 0);
-  }
-
-  xQueueSend(mqttQueue, &mqttMsg, 0);
-
-  // Re-broadcast if needed
-  // rebroadcastIfNeeded(msg_id, type, msg);
-}
-//========================================//
 
 
 // =============================
@@ -992,24 +816,7 @@ void setup() {
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
 
-  // ---- LDR SENSOR SETUP ----
-  #ifdef USE_LDR_SENSOR
-    Serial.println("🔄 Initializing LDR Sensor...");
-    pinMode(LDR_PIN, INPUT);
-    Serial.println("\n✅ LDR Sensor Test");
-  #endif
-
-  #ifdef USE_GY30
-    // Initialize I2C
-    Wire.begin();
-    // Initialize BH1750 (default address 0x23)
-    if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
-        Serial.println("✅BH1750 initialized successfully");
-    } else {
-        Serial.println("❌Error initializing BH1750");
-    }
-  #endif
-  //========================================//
+  //=========================================
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);
@@ -1019,20 +826,6 @@ void setup() {
   mqtt.setKeepAlive(60);
   mqtt.setCallback(mqttCallback);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("❌ ESP-NOW Init Failed");
-    return;
-  }
-
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-  esp_now_add_peer(&peerInfo);
-  esp_now_register_recv_cb(onReceive);
 
   mqttQueue = xQueueCreate(50, sizeof(MqttMessage));
   if (mqttQueue == NULL) {
