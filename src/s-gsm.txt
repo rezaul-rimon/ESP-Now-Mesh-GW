@@ -1,0 +1,362 @@
+#define TINY_GSM_MODEM_SIM7600
+
+#include <Arduino.h>
+#include <TinyGsmClient.h>
+#include <PubSubClient.h>
+#include <esp_task_wdt.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+
+// ==================== Configuration ====================
+
+// Hardware
+#define SIM_RX 16
+#define SIM_TX 17
+#define GSM_PWRKEY_PIN 15
+#define STATUS_LED_PIN 2
+
+// Timings
+#define SENSOR_INTERVAL_MS 300000    // 5 minutes
+#define WDT_TIMEOUT_MS 120000        // 2 minutes
+#define RECONNECT_INTERVAL_MS 60000  // 1 minute
+
+// Task Priorities (higher number = higher priority)
+#define NETWORK_TASK_PRIORITY 3
+#define MAIN_TASK_PRIORITY 2
+
+// Stack Sizes
+#define NETWORK_TASK_STACK_SIZE 10 * 1024
+#define MAIN_TASK_STACK_SIZE 8 * 1024
+
+// Queue sizes
+#define SENSOR_QUEUE_SIZE 5
+
+// GSM
+const char apn[] = "internet";
+const char gprsUser[] = "";
+const char gprsPass[] = "";
+
+bool firstBoot = true;
+
+// MQTT
+const char* mqttBroker = "broker.hivemq.com";
+const int mqttPort = 1883;
+const char* subTopic = "sabbir/device/sub";
+const char* pubTopic = "sabbir/device/pub";
+const char* heartbeatTopic = "sabbir/device/heartbeat";
+
+// ==================== Data Structures ====================
+struct SensorData {
+    float temperature;
+    int analog;
+};
+
+// ==================== Global Objects ====================
+TinyGsm modem(Serial1);
+TinyGsmClient gsmClient(modem);
+PubSubClient mqtt(gsmClient);
+
+bool currentConnectionStatus = false;
+
+// ==================== FreeRTOS Objects ====================
+QueueHandle_t sensorQueue;
+SemaphoreHandle_t networkMutex;
+TaskHandle_t networkTaskHandle;
+TaskHandle_t mainTaskHandle;
+
+// ==================== Helper Functions ====================
+
+
+void initializeHardware() {
+    Serial.begin(115200);
+    Serial1.begin(115200, SERIAL_8N1, SIM_RX, SIM_TX);
+
+    pinMode(GSM_PWRKEY_PIN, OUTPUT);
+    digitalWrite(GSM_PWRKEY_PIN, HIGH);
+
+    analogReadResolution(12);
+
+}
+
+void powerCycleModem() {
+    digitalWrite(GSM_PWRKEY_PIN, LOW);
+    vTaskDelay(pdMS_TO_TICKS(1200)); // Power key press
+    digitalWrite(GSM_PWRKEY_PIN, HIGH);
+
+    int waitTime = 0;
+    while (!modem.testAT() && waitTime < 15000) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        waitTime += 500;
+    }
+}
+
+bool initializeModem() {
+    powerCycleModem();
+
+    if (!modem.restart()) {
+        Serial.println("Modem restart failed");
+        return false;
+    }
+
+    Serial.println("Modem initialized");
+    return true;
+}
+
+bool connectToNetwork() {
+    Serial.println("Connecting to network...");
+
+    modem.restart();
+    
+    if (!modem.waitForNetwork()) {
+        Serial.println("Network connection failed");
+        return false;
+    }
+
+    if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
+        Serial.println("GPRS connection failed");
+        return false;
+    }
+
+    Serial.println("Network connected");
+    return true;
+}
+
+void reconnectMqtt() {
+    Serial.println("Attempting MQTT connection...");
+    
+    // Generate unique client ID with timestamp
+    String clientId = "GMS12Client-";
+    clientId += String(millis());
+    
+    if (mqtt.connect(clientId.c_str())) {
+        Serial.println("MQTT connected");
+        
+        // Subscribe to topics
+        mqtt.subscribe(subTopic);
+        Serial.print("Subscribe Topic: "); Serial.println(subTopic);
+        
+        // Send initialization message if first boot
+        if (firstBoot) {
+            String payload = "initialized" ;
+            mqtt.publish(pubTopic, payload.c_str());
+            firstBoot = false;
+        }
+    } else {
+        Serial.print("MQTT connection failed, rc=");
+        Serial.println(mqtt.state());
+    }
+}
+
+SensorData readSensors() {
+    SensorData data;
+
+    return data;
+}
+
+bool publishData(const SensorData& data) {
+    char payload[100];
+    snprintf(payload, sizeof(payload),
+        "{\"temp\":%.2f,\"a\":%d}",
+        data.temperature, data.analog);
+
+    if (mqtt.publish(pubTopic, payload)) {
+        Serial.printf("Published: %s\n", payload);
+        return true;
+    }
+    
+    Serial.printf("Failed to Publish: %s\n", payload);
+    return false;
+}
+
+void publishHeartbeat() {
+    char payload[100];
+    snprintf(payload, sizeof(payload),
+        "{\"heap\":%d,\"uptime\":%lu}",
+        ESP.getFreeHeap(), millis() / 60000);
+
+    mqtt.publish(heartbeatTopic, payload);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    String message;
+    for (unsigned int i = 0; i < length; i++) {
+        message += (char)payload[i];
+    }
+
+    Serial.printf("[MQTT] Received on %s: %s\n", topic, message.c_str());
+
+    // Simple command example: {"led":"on"} or {"led":"off"}
+    if (message.indexOf("on") >= 0) {
+        digitalWrite(STATUS_LED_PIN, HIGH);
+    } else if (message.indexOf("off") >= 0) {
+        digitalWrite(STATUS_LED_PIN, LOW);
+    }
+}
+
+// ==================== FreeRTOS Tasks ====================
+
+void networkTask(void *pvParameters) {
+    uint8_t connectionRetries = 0;
+    const uint8_t MAX_CONNECTION_RETRIES = 5;
+    const unsigned long CONNECTION_RETRY_DELAY = 30000UL;  // 30 seconds between retries
+
+    Serial.println("[NET] Network task started");
+
+    if (!initializeModem() || !connectToNetwork()) {
+        Serial.println("[NET] Initialization failed - restarting esp");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP.restart();
+    }
+
+    mqtt.setServer(mqttBroker, mqttPort);
+    mqtt.setCallback(mqttCallback);
+    mqtt.setBufferSize(2048);
+
+    unsigned long lastReconnectAttempt = 0;
+
+    for (;;) {
+        esp_task_wdt_reset();  // 🛡 Feed WDT
+
+        // Network connection management
+        if (!modem.isGprsConnected()) {
+            if (!connectToNetwork()) {
+                // If connection fails, try resetting modem
+                if (connectionRetries >= MAX_CONNECTION_RETRIES) {
+                    Serial.println("Max connection retries reached. Resetting modem...");
+                    initializeModem();
+                    connectionRetries = 0;
+                } else {
+                    Serial.printf("Retry %d/%d in %ds...\n", 
+                                connectionRetries + 1, 
+                                MAX_CONNECTION_RETRIES,
+                                CONNECTION_RETRY_DELAY/1000);
+                    
+                    // Non-blocking wait with WDT feed
+                    uint32_t retryStart = millis();
+                    while (millis() - retryStart < CONNECTION_RETRY_DELAY) {
+                        esp_task_wdt_reset();
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                    }
+                    
+                    connectionRetries++;
+                }
+                continue;  // Skip rest until connected
+            }
+            connectionRetries = 0;  // Reset on successful connection
+        }
+
+        // MQTT connection management
+        if (modem.isGprsConnected() && !mqtt.connected()) {
+            reconnectMqtt();
+        }
+
+        // Process MQTT messages if connected
+        if (mqtt.connected()) {
+            mqtt.loop();
+
+            SensorData data;
+            if (xQueueReceive(sensorQueue, &data, pdMS_TO_TICKS(100)) == pdPASS) {
+                publishData(data);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+
+void mainTask(void* pvParameters) {
+    unsigned long previousMillis = 0;
+    const unsigned long interval = 60000; // 1 minute in milliseconds
+
+    for (;;) {
+        esp_task_wdt_reset();  // 🛡 Feed WDT
+
+        SensorData data = readSensors();
+
+        if (millis() - previousMillis >= interval) {
+
+            if (xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100)) == pdPASS) {
+                Serial.println("[mainTask] Data enqueued");
+            } else {
+                Serial.println("[mainTask] Queue full, removing oldest...");
+    
+                // Remove one item (oldest) to make room
+                SensorData discarded;
+                if (xQueueReceive(sensorQueue, &discarded, 0) == pdPASS) {
+                    Serial.println("[mainTask] Oldest data discarded");
+    
+                    // Try enqueue again
+                    if (xQueueSend(sensorQueue, &data, pdMS_TO_TICKS(100)) == pdPASS) {
+                    Serial.println("[mainTask] New data enqueued after drop");
+                    } else {
+                    Serial.println("[mainTask] Still failed to enqueue after drop");
+                    }
+                } else {
+                    Serial.println("[mainTask] Failed to discard data from full queue");
+                }
+            }
+
+            previousMillis = millis();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+// ==================== Setup & Loop ====================
+
+void setup() {
+    initializeHardware();
+    pinMode(STATUS_LED_PIN, OUTPUT); digitalWrite(STATUS_LED_PIN, HIGH); delay(100); (STATUS_LED_PIN, LOW);
+    
+    // Create FreeRTOS objects
+    sensorQueue = xQueueCreate(SENSOR_QUEUE_SIZE, sizeof(SensorData));
+    networkMutex = xSemaphoreCreateMutex();
+
+    if (sensorQueue == NULL || networkMutex == NULL) {
+        Serial.println("Failed to create FreeRTOS objects - restarting");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP.restart();
+    }
+
+    // Create tasks
+    xTaskCreatePinnedToCore(
+        networkTask,           // Task function
+        "NetworkTask",         // Task name
+        NETWORK_TASK_STACK_SIZE, // Stack size
+        NULL,                 // Parameters
+        NETWORK_TASK_PRIORITY, // Priority
+        &networkTaskHandle,    // Task handle
+        0                      // Core (1 is typically less busy)
+    );
+
+    xTaskCreatePinnedToCore(
+        mainTask,            // Task function
+        "mainTask",          // Task name
+        MAIN_TASK_STACK_SIZE, // Stack size
+        NULL,                  // Parameters
+        MAIN_TASK_PRIORITY,  // Priority
+        &mainTaskHandle,     // Task handle
+        1                      // Core
+    );
+
+    esp_log_level_set("*", ESP_LOG_VERBOSE); // Add in setup()
+    // Enable watchdog
+    esp_task_wdt_init(WDT_TIMEOUT_MS / 1000, true);
+    esp_task_wdt_add(networkTaskHandle);
+    esp_task_wdt_add(mainTaskHandle);
+
+    digitalWrite(STATUS_LED_PIN, HIGH); delay(100); (STATUS_LED_PIN, LOW);
+    digitalWrite(STATUS_LED_PIN, HIGH); delay(100); (STATUS_LED_PIN, LOW);
+    digitalWrite(STATUS_LED_PIN, HIGH); delay(100); (STATUS_LED_PIN, LOW);
+
+
+}
+
+void loop() {
+    // FreeRTOS tasks handle everything, so we can just delay here
+    vTaskDelay(portMAX_DELAY);
+}

@@ -4,6 +4,9 @@
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 #define USE_SD_CARD false
+#define USE_ENERGY_METER
+// #define USE_SELEC_MFM384 // 
+#define USE_DZ81_DZS500 // 
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
@@ -16,28 +19,49 @@
 #include <deque>
 #include <algorithm>
 #include <freertos/FreeRTOS.h>
+#include <esp_task_wdt.h>
 #include <FastLED.h>
+#include <Preferences.h>
+#include <Update.h>
 
-// #define DEBUG_MODE true
-// #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
-// #define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
-// #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
+#define CONFIG_TASK_WDT_DEBUG 1
 
-//Gateway configuration
-const char* DEVICE_ID = "1191032506169999";
+Preferences preferences;
+
+#define DEBUG_MODE false
+#define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
+#define DEBUG_PRINTF(x)  if (DEBUG_MODE) { Serial.printf(x); }
+#define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
+
+
+#define CHANGE_DEICE_ID 1
+
+#if CHANGE_DEICE_ID
+    #define WORK_PACKAGE "1191"
+    #define GW_TYPE "03"
+    #define FIRMWARE_UPDATE_DATE "250616" 
+    #define DEVICE_SERIAL "0022"
+    //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
+#endif
+
+const char* DEVICE_ID;
+
+
 
 const char* Local_ID = "gw0"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 5 * 60 * 1000;
+const unsigned long dataPublishInterval = 1 * 20 * 1000;
 
 unsigned long lastHBPublishTime = 0;
 const unsigned long hbPublishInterval = 2 * 60 * 1000;
 
 unsigned long lastHourCheck = 0;
 bool snapshotSentThisHour = false;
+
+bool ledState = false;
 
 //FastLED library for controlling LEDs
 #define LED_PIN 4
@@ -52,13 +76,22 @@ CRGB leds[NUM_LEDS];
 #define MODEM_PWR 15
 #define SIM_BAUD 115200
 
-const char apn[] = "blweb";
-const char user[] = "";
-const char pass[] = "";
+const char apn[] = "internet"; // APN
+const char apnUser[] = "";
+const char apnPass[] = "";
 const char* broker = "broker2.dma-bd.com";
 const char* mqttUser = "broker2";
 const char* mqttPass = "Secret!@#$1234";
 bool gsmConnected = false;
+
+// OTA server (default) - used when OTA command doesn't supply a URL
+const char* otaHostDefault = "iot2.dma-bd.com";
+const int otaPortDefault = 5000;
+const char* otaPathDefault = "/download/MeshAC261025.bin";
+
+#define NETWORK_TASK_PRIORITY 3
+#define OTA_TASK_STACK_SIZE     (16 * 1024)
+
 
 // MQTT settings
 char mqttSubTopic[64]; 
@@ -69,34 +102,62 @@ char mqttSubTopic[64];
 #define MQTT_AC_SUB "DMA/MeshAC/SUB"
 #define MQTT_AC_ACK "DMA/MeshAC/ACK"
 #define MQTT_AC_TMP "DMA/MeshAC/TEMP"
-// #define MQTT_CMD "DMA/AC/CMD"
+#define MQTT_OTA_PUB "DMA/MeshAC/OTA"
 
 // RS485 Serial2 Pins
 #define RS485_RX 27
 #define RS485_TX 14
 
-// Modbus register addresses
-#define taeHigh_reg_addr     0x30
-#define taeLow_reg_addr      0x31
-#define activePower_reg_addr 0x1A
-#define pAvolt_reg_addr      0x14
-#define pBvolt_reg_addr      0x15
-#define pCvolt_reg_addr      0x16
-#define lABvolt_reg_addr     0x17
-#define lBCvolt_reg_addr     0x18
-#define lCAvolt_reg_addr     0x19
-#define pAcurrent_reg_addr   0x10
-#define pBcurrent_reg_addr   0x11
-#define pCcurrent_reg_addr   0x12
-#define frequency_reg_addr   0x1E
-#define powerfactor_reg_addr 0x1D
+#ifdef USE_SELEC_MFM384
+    // Modbus register addresses
+    #define tNetEnergy_reg_addr 0x3A
+    #define tImpEnergy_reg_addr 0x60
+    #define activePower_reg_addr 0x2A
+    #define pAvolt_reg_addr 0x00
+    #define pBvolt_reg_addr 0x02
+    #define pCvolt_reg_addr 0x04
+    #define lABvolt_reg_addr 0x08
+    #define lBCvolt_reg_addr 0x0A
+    #define lCAvolt_reg_addr 0x0C
+    #define pAcurrent_reg_addr 0x10
+    #define pBcurrent_reg_addr 0x12
+    #define pCcurrent_reg_addr 0x14
+    #define frequency_reg_addr 0x38
+    #define powerfactor_reg_addr 0x36
 
+#elif defined(USE_DZ81_DZS500)
+    // Modbus register addresses for 3-phase meter
+    #define taeHigh_reg_addr     0x30
+    #define taeLow_reg_addr      0x31
+    #define activePower_reg_addr 0x1A
+    #define pAvolt_reg_addr      0x14
+    #define pBvolt_reg_addr      0x15
+    #define pCvolt_reg_addr      0x16
+    #define lABvolt_reg_addr     0x17
+    #define lBCvolt_reg_addr     0x18
+    #define lCAvolt_reg_addr     0x19
+    #define pAcurrent_reg_addr   0x10
+    #define pBcurrent_reg_addr   0x11
+    #define pCcurrent_reg_addr   0x12
+    #define frequency_reg_addr   0x1E
+    #define powerfactor_reg_addr 0x1D
+#endif
+
+#ifdef USE_SELEC_MFM384
+    // Modbus data variables
+    float tNetEnergy, tImpEnergy, activePower;
+    float pAvolt, pBvolt, pCvolt;
+    float lABvolt, lBCvolt, lCAvolt;
+    float pAcurrent, pBcurrent, pCcurrent;
+    float frequency, powerFactor;
+#elif defined(USE_DZ81_DZS500)
 // Data variables
-int taeHigh, taeLow, activePower;
-int pAvolt, pBvolt, pCvolt;
-int lABvolt, lBCvolt, lCAvolt;
-int pAcurrent, pBcurrent, pCcurrent;
-int frequency, powerFactor;
+    int taeHigh, taeLow, activePower;
+    int pAvolt, pBvolt, pCvolt;
+    int lABvolt, lBCvolt, lCAvolt;
+    int pAcurrent, pBcurrent, pCcurrent;
+    int frequency, powerFactor;
+#endif
 
 char em_data[128];
 ModbusMaster node;
