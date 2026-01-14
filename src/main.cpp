@@ -40,6 +40,34 @@ String otaPath = otaPathDefault;
 volatile bool otaInProgress = false;
 //================================
 
+// NTC Sensor Configuration
+#if defined(USE_NTC_SENSOR)
+  float readNTCTemperatureC() {
+    uint32_t adcSum = 0;
+
+    for (int i = 0; i < SAMPLE_COUNT; i++) {
+        adcSum += analogRead(ADC_PIN);
+        delay(5);
+    }
+
+    float adcAvg = adcSum / (float)SAMPLE_COUNT;
+    float voltage = (adcAvg / ADC_MAX) * VREF;
+
+    float resistance = SERIES_RESISTOR * ((VREF / voltage) - 1.0);
+
+    float steinhart;
+    steinhart = resistance / NOMINAL_RESISTANCE;
+    steinhart = log(steinhart);
+    steinhart /= B_COEFFICIENT;
+    steinhart += 1.0 / (NOMINAL_TEMP + 273.15);
+    steinhart = 1.0 / steinhart;
+    steinhart -= 273.15;
+
+    // ✔ Apply calibration offset
+    return steinhart + OFFSET_TEMPERATURE;
+  }
+#endif
+//========================================//
 
 // Sensor reading functions
 #ifdef USE_HDC1080_SENSOR
@@ -119,55 +147,57 @@ void publishHeartbeat(){
 // Function to publish sensor data
 void publishData(){
   #ifdef USE_HDC1080_SENSOR
-      float temp = readTemperature();
-      float hum = readHumidity();
+    float temp2 = readTemperature();
+    float temp = readNTCTemperatureC();
+    float hum = readHumidity();
 
-      Serial.print("Temperature: ");
-      Serial.print(temp, 2);
-      Serial.print(" °C  |  Humidity: ");
-      Serial.print(hum, 2);
-      Serial.println(" %");
-    #endif
+    Serial.print("Temperature: ");
+    Serial.print(temp, 2);
+    Serial.print(" °C  |  Humidity: ");
+    Serial.print(hum, 2);
+    Serial.println(" %");
+  #endif
 
-    #ifdef USE_LDR_SENSOR
-      Serial.print("LDR Value: ");
-      int ldrValue = analogRead(LDR_PIN);
-      Serial.print(ldrValue);
-      Serial.println();
+  #ifdef USE_LDR_SENSOR
+    Serial.print("LDR Value: ");
+    int ldrValue = analogRead(LDR_PIN);
+    Serial.print(ldrValue);
+    Serial.println();
 
-      float lux = ldrToLux(ldrValue);
-      lux = lux * 1.45; // Calibration factor
-      Serial.print("Calculated Lux: ");
-      Serial.print(lux, 2);
-      Serial.println(" lx");
-    #endif
+    float lux = ldrToLux(ldrValue);
+    lux = lux * 1.45; // Calibration factor
+    Serial.print("Calculated Lux: ");
+    Serial.print(lux, 2);
+    Serial.println(" lx");
+  #endif
 
-    #ifdef USE_NH3_SENSOR
-      float adcValue = analogRead(NH3_PIN);
-      Serial.print("Ammonia Sensor ADC Value: ");
-      Serial.println(adcValue);
+  #ifdef USE_NH3_SENSOR
+    float adcValue = analogRead(NH3_PIN);
+    Serial.print("Ammonia Sensor ADC Value: ");
+    Serial.println(adcValue);
 
-      float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
-      Serial.print("RL Voltage: ");
-      Serial.print(voltageL, 3);
-      Serial.println(" V");
+    float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
+    Serial.print("RL Voltage: ");
+    Serial.print(voltageL, 3);
+    Serial.println(" V");
 
-      float voltageS = 3.3 - voltageL;
-      Serial.print("Rs Voltage: ");
-      Serial.print(voltageS, 3);
-      Serial.println(" V");
+    float voltageS = 3.3 - voltageL;
+    Serial.print("Rs Voltage: ");
+    Serial.print(voltageS, 3);
+    Serial.println(" V");
 
-      float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
-      Serial.print("Calculated Rs: ");
-      Serial.print(Rs, 2);
-      Serial.println(" Ohm");
+    float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
+    Serial.print("Calculated Rs: ");
+    Serial.print(Rs, 2);
+    Serial.println(" Ohm");
 
-      float ratio = Rs / 10000.0; // RL = 10k Ohm
-      float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
-      Serial.print("Calculated Ammonia Concentration: ");
-      Serial.print(ppm, 2);
-      Serial.println(" ppm");
-    #endif
+    float ratio = Rs / 10000.0; // RL = 10k Ohm
+    float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
+    Serial.print("Calculated Ammonia Concentration: ");
+    Serial.print(ppm, 2);
+    Serial.println(" ppm");
+  #endif
+  Serial.println("-----------------------------------");
 
     // Prepare and send MQTT data message
     MqttMessage dataMsg;
@@ -181,8 +211,54 @@ void publishData(){
       );
     xQueueSend(mqttQueue, &dataMsg, 0);
 
-    LedBlink hbBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &hbBlink, 0);
+    LedBlink dataBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
+    xQueueSend(ledQueue, &dataBlink, 0);
+
+    // TVOC Sensor Reading
+    #if defined(USE_TVOC_SENSOR)
+      if (!sgp.IAQmeasure() || !sgp.IAQmeasureRaw())
+      {
+          Serial.println("SGP30 measurement failed");
+          delay(1000);
+          return;
+      }
+
+      float eco2 = sgp.eCO2;;
+      float tvoc = sgp.TVOC;
+      int16_t h2 = sgp.rawH2;
+      int16_t ethanol = sgp.rawEthanol;
+
+      Serial.print("eCO2: ");
+      Serial.print(eco2);
+      Serial.print(" ppm | ");
+
+      Serial.print("TVOC: ");
+      Serial.print(tvoc);
+      Serial.print(" ppb | ");
+
+      Serial.print("H2: ");
+      Serial.print(h2);
+      Serial.print(" | ");
+
+      Serial.print("Ethanol: ");
+      Serial.println(ethanol);
+
+      MqttMessage dataMsg2;
+      snprintf(dataMsg2.topic, MAX_TOPIC_LEN, MQTT_MC_PUB2);
+      snprintf(dataMsg2.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
+              DEVICE_ID,
+              (eco2 >= 0) ? String(eco2, 2).c_str() : "N/A",
+              (tvoc >= 0) ? String(tvoc, 2).c_str() : "N/A",
+              (h2 >= 0) ? String(h2).c_str() : "N/A",
+              (ethanol >= 0) ? String(ethanol).c_str() : "N/A"
+        );
+      xQueueSend(mqttQueue, &dataMsg2, 0);
+
+      LedBlink data2Blink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
+      xQueueSend(ledQueue, &data2Blink, 0);
+
+    #endif
+
 }
 //========================================//
 
@@ -303,53 +379,53 @@ String mqttStateToText(int state) {
 
 // ---- MQTT reconnect with exponential backoff and ESP32 restart ----
 void reconnectMqtt() {
-    static uint8_t mqttFailCount = 0;
-    static unsigned long lastAttempt = 0;
-    static unsigned long retryInterval = 1000; // start 1 sec
-    const unsigned long MAX_INTERVAL = 60000;
-    const uint8_t MAX_FAILS_BEFORE_RESTART = 20;
+  static uint8_t mqttFailCount = 0;
+  static unsigned long lastAttempt = 0;
+  static unsigned long retryInterval = 1000; // start 1 sec
+  const unsigned long MAX_INTERVAL = 60000;
+  const uint8_t MAX_FAILS_BEFORE_RESTART = 20;
 
-    if (!mqtt.connected() && modem.isGprsConnected()) {
-        unsigned long now = millis();
-        if (now - lastAttempt < retryInterval) return;
-        lastAttempt = now;
+  if (!mqtt.connected() && modem.isGprsConnected()) {
+      unsigned long now = millis();
+      if (now - lastAttempt < retryInterval) return;
+      lastAttempt = now;
 
-        char clientId[32];
-        snprintf(clientId, sizeof(clientId), "MeshAC_%04X%04X%04X",
-                  random(0xFFFF), random(0xFFFF), random(0xFFFF));
+      char clientId[32];
+      snprintf(clientId, sizeof(clientId), "MeshAC_%04X%04X%04X",
+                random(0xFFFF), random(0xFFFF), random(0xFFFF));
 
-        Serial.printf("[%lu ms] [MQTT] Connecting as client ID: %s\n", millis(), clientId);
+      Serial.printf("[%lu ms] [MQTT] Connecting as client ID: %s\n", millis(), clientId);
 
-        if (mqtt.connect(clientId, mqttUser, mqttPass)) {
-            mqttFailCount = 0;
-            retryInterval = 5000; // reset backoff
-            Serial.println("[MQTT] ✅ Connected");
+      if (mqtt.connect(clientId, mqttUser, mqttPass)) {
+          mqttFailCount = 0;
+          retryInterval = 5000; // reset backoff
+          Serial.println("[MQTT] ✅ Connected");
 
-            snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_MC_SUB, DEVICE_ID);
-            mqtt.subscribe(mqttSubTopic);
+          snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_MC_SUB, DEVICE_ID);
+          mqtt.subscribe(mqttSubTopic);
 
-            leds[0] = CRGB::Green; // indicate connected
-            FastLED.show();
-        } else {
-            esp_task_wdt_reset();
-            mqttFailCount++;
-            retryInterval = min(retryInterval * 2, MAX_INTERVAL); // exponential backoff
-            Serial.printf("[MQTT] ❌ Connect failed (%d: %s) | Retry %d | Next attempt in %lus\n",
-                          mqtt.state(),
-                          mqttStateToText(mqtt.state()).c_str(),
-                          mqttFailCount,
-                          retryInterval / 1000);
+          leds[0] = CRGB::Green; // indicate connected
+          FastLED.show();
+      } else {
+          esp_task_wdt_reset();
+          mqttFailCount++;
+          retryInterval = min(retryInterval * 2, MAX_INTERVAL); // exponential backoff
+          Serial.printf("[MQTT] ❌ Connect failed (%d: %s) | Retry %d | Next attempt in %lus\n",
+                        mqtt.state(),
+                        mqttStateToText(mqtt.state()).c_str(),
+                        mqttFailCount,
+                        retryInterval / 1000);
 
-            leds[0] = CRGB::Yellow;
-            FastLED.show();
+          leds[0] = CRGB::Yellow;
+          FastLED.show();
 
-            if (mqttFailCount >= MAX_FAILS_BEFORE_RESTART) {
-                Serial.println("[MQTT] ⚠️ Too many failures — restarting ESP32...");
-                delay(2000);
-                ESP.restart();
-            }
-        }
-    }
+          if (mqttFailCount >= MAX_FAILS_BEFORE_RESTART) {
+              Serial.println("[MQTT] ⚠️ Too many failures — restarting ESP32...");
+              delay(2000);
+              ESP.restart();
+          }
+      }
+  }
 }
 //========================================//
 
@@ -1057,6 +1133,16 @@ void setup() {
 
   pinMode(LDR_PIN, INPUT);
   pinMode(NH3_PIN, INPUT);
+
+  #if defined(USE_TVOC_SENSOR)
+    Serial.println("🔄 Initializing SGP30 Sensor...");
+    if (!sgp.begin()) {
+      Serial.println("SGP30 not detected");
+    }
+    else {
+      Serial.println("✅ SGP30 Air Quality Sensor Detected");
+    }
+  #endif
 
   SerialAT.begin(SIM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   pinMode(MODEM_PWR, OUTPUT);

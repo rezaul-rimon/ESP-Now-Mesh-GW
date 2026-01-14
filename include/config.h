@@ -11,6 +11,8 @@
 #define USE_HDC1080_SENSOR
 #define USE_LDR_SENSOR
 #define USE_NH3_SENSOR
+#define USE_NTC_SENSOR
+// #define USE_TVOC_SENSOR
 
 //======================================//
 
@@ -29,6 +31,8 @@
 #include <Preferences.h>
 #include <Update.h>
 #include <Wire.h>
+#include <Adafruit_SGP30.h>
+
 
 #define CONFIG_TASK_WDT_DEBUG 1
 
@@ -47,12 +51,30 @@ Preferences preferences;
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1178"
     #define GW_TYPE "00"
-    #define FIRMWARE_UPDATE_DATE "251015" 
-    #define DEVICE_SERIAL "0888"
-    //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
+    #define FIRMWARE_UPDATE_DATE "260107" 
+    #define DEVICE_SERIAL "0003"
 #endif
 
 const char* DEVICE_ID;
+//========================================//
+
+// NTC Sensor Configuration
+#if defined(USE_NTC_SENSOR)
+    #define ADC_PIN            35        // GPIO36 (ADC1_CH0)
+    #define ADC_MAX            4095.0
+    #define VREF               3.6        // ESP32 ADC reference
+    #define SERIES_RESISTOR    10000.0    // 10k fixed resistor
+    #define NOMINAL_RESISTANCE 10000.0    // 10k NTC @ 25C
+    #define NOMINAL_TEMP       25.0       // °C
+    #define B_COEFFICIENT      3950.0
+    #define SAMPLE_COUNT       20         // ADC averaging
+    #define OFFSET_TEMPERATURE      0.0f        // Calibration offset
+#endif
+//========================================//
+
+#if defined(USE_TVOC_SENSOR)
+    Adafruit_SGP30 sgp;
+#endif
 //========================================//
 
 const char* Local_ID = "gw1"; // Gateway ID
@@ -123,6 +145,7 @@ const char* otaPathDefault = "/download/MC251015.bin";
 char mqttSubTopic[64]; 
 #define MQTT_PORT 1883
 #define MQTT_MC_PUB "DMA/MC/PUB"
+#define MQTT_MC_PUB2 "DMA/MC/PUB2"
 #define MQTT_MC_SUB "DMA/MC/SUB"
 #define MQTT_MC_HB "DMA/MC/HB"
 #define MQTT_OTA_PUB "DMA/MC/OTA"
