@@ -45,10 +45,10 @@ Preferences preferences;
 #define CHANGE_DEICE_ID 0
 
 #if CHANGE_DEICE_ID
-    #define WORK_PACKAGE "1178"
-    #define GW_TYPE "00"
-    #define FIRMWARE_UPDATE_DATE "251015" 
-    #define DEVICE_SERIAL "0888"
+    #define WORK_PACKAGE "1191"
+    #define GW_TYPE "03"
+    #define FIRMWARE_UPDATE_DATE "250616" 
+    #define DEVICE_SERIAL "0020"
     //#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
 
