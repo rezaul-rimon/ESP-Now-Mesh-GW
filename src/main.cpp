@@ -84,6 +84,7 @@ void publishHeartbeat(){
 // Function to publish sensor data
 void publishData(){
   
+    float lux = -1;
     // Read LDR value and convert to Lux
     #ifdef USE_LDR_SENSOR
       Serial.print("LDR Value: ");
@@ -91,7 +92,7 @@ void publishData(){
       Serial.print(ldrValue);
       Serial.println();
 
-      float lux = ldrToLux(ldrValue);
+      lux = ldrToLux(ldrValue);
       lux = lux * 1.45; // Calibration factor
       Serial.print("Calculated Lux: ");
       Serial.print(lux, 2);
@@ -101,7 +102,7 @@ void publishData(){
 
     // Get light level from BH1750
     #ifdef USE_GY30
-      float lux = -1;
+      
       if (lightMeter.measurementReady()) {
         lux = lightMeter.readLightLevel();
         Serial.print("BH1750 Light Level: ");

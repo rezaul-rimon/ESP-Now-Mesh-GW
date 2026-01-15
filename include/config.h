@@ -9,7 +9,7 @@
 // #define USE_SD_CARD
 #define USE_FastLED
 // #define USE_LDR_SENSOR
-#define USE_GY30
+// #define USE_GY30
 //======================================//
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
