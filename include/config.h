@@ -46,7 +46,7 @@ Preferences preferences;
     #define WORK_PACKAGE "1225"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "260121" 
-    #define DEVICE_SERIAL "0004"
+    #define DEVICE_SERIAL "0005"
 #endif
 
 const char* DEVICE_ID;
