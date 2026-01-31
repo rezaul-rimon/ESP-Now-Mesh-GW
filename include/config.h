@@ -8,7 +8,7 @@
 // === Project Configuration === //
 // #define USE_SD_CARD
 #define USE_FastLED
-// #define USE_LDR_SENSOR
+#define USE_LDR_SENSOR
 // #define USE_GY30
 //======================================//
 
@@ -43,10 +43,10 @@ Preferences preferences;
 #define CHANGE_DEICE_ID 0
 
 #if CHANGE_DEICE_ID
-    #define WORK_PACKAGE "1178"
+    #define WORK_PACKAGE "1225"
     #define GW_TYPE "03"
-    #define FIRMWARE_UPDATE_DATE "260104" 
-    #define DEVICE_SERIAL "0055"
+    #define FIRMWARE_UPDATE_DATE "260121" 
+    #define DEVICE_SERIAL "0004"
 #endif
 
 const char* DEVICE_ID;
@@ -55,12 +55,12 @@ const char* DEVICE_ID;
 const char* Local_ID = "gw1"; // Gateway ID
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-//Timers for publishing dat/a and heartbeat
+//Timers for publishing data and heartbeat
 unsigned long lastDataPublishTime = 0;
 const unsigned long dataPublishInterval = 5 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
-const unsigned long hbPublishInterval = 2 * 60 * 1000;
+const unsigned long hbPublishInterval = 5 * 60 * 1000;
 
 unsigned long lastHourCheck = 0;
 bool snapshotSentThisHour = false;
@@ -78,7 +78,7 @@ bool ledState = false;
 
 // Sensor configuration
 #ifdef USE_LDR_SENSOR
-    #define LDR_PIN 32 // Pin for LDR sensor
+    #define LDR_PIN 39 // Pin for LDR sensor
 #endif
 
 #ifdef USE_GY30
@@ -106,7 +106,7 @@ bool gsmConnected = false;
 // OTA server (default) - used when OTA command doesn't supply a URL
 const char* otaHostDefault = "iot2.dma-bd.com";
 const int otaPortDefault = 5000;
-const char* otaPathDefault = "/download/MC251015.bin";
+const char* otaPathDefault = "/download/MeshGWLP260121.bin";
 
 #define NETWORK_TASK_PRIORITY 3
 #define OTA_TASK_STACK_SIZE     (16 * 1024)
@@ -116,13 +116,13 @@ const char* otaPathDefault = "/download/MC251015.bin";
 // MQTT settings
 char mqttSubTopic[64]; 
 #define MQTT_PORT 1883
-#define MQTT_MC_PUB "DMA/MC/PUB"
-#define MQTT_MC_SUB "DMA/MC/SUB"
-#define MQTT_MC_HB "DMA/MC/HB"
-#define MQTT_OTA_PUB "DMA/MC/OTA"
+#define MQTT_MC_PUB "DMA/MeshGWLP/PUB"
+#define MQTT_MC_SUB "DMA/MeshGWLP/SUB"
+#define MQTT_MC_HB "DMA/MeshGWLP/HB"
+#define MQTT_OTA_PUB "DMA/MeshGWLP/OTA"
 
-#define MQTT_SMARTSWITCH_HB "DMA/SmartSwitch/HB"
-#define MQTT_SMARTSWITCH_ACK "DMA/SmartSwitch/PUB"
+#define MQTT_SMARTSWITCH_HB "DMA/SmartSwitchLP/HB"
+#define MQTT_SMARTSWITCH_ACK "DMA/SmartSwitchLP/ACK"
 
 //Struct to hold message data
 #define MAX_MQTT_MSG_LEN 128

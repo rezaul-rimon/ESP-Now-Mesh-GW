@@ -72,7 +72,7 @@ volatile bool otaInProgress = false;
 void publishHeartbeat(){
   MqttMessage hbMsg;
   snprintf(hbMsg.topic, MAX_TOPIC_LEN, MQTT_MC_HB);
-  snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,wifi_connected", DEVICE_ID);
+  snprintf(hbMsg.payload, MAX_MQTT_MSG_LEN, "%s,gsm_connected", DEVICE_ID);
 
   xQueueSend(mqttQueue, &hbMsg, 0);
   
@@ -89,11 +89,12 @@ void publishData(){
     #ifdef USE_LDR_SENSOR
       Serial.print("LDR Value: ");
       int ldrValue = analogRead(LDR_PIN);
+      ldrValue = map(ldrValue, 0, 4095, 4095, 0); // Invert reading
       Serial.print(ldrValue);
       Serial.println();
 
       lux = ldrToLux(ldrValue);
-      lux = lux * 1.45; // Calibration factor
+      // lux = lux * 1.45; // Calibration factor
       Serial.print("Calculated Lux: ");
       Serial.print(lux, 2);
       Serial.println(" lx");
@@ -116,16 +117,9 @@ void publishData(){
 
     // Prepare and send MQTT data message
     MqttMessage dataMsg;
-    float temp = -1;
-    float hum = -1;
-    float ppm = -1;
-
     snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
-    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
+    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s",
             DEVICE_ID,
-            (temp >= 0) ? String(temp, 2).c_str() : "N/A",
-            (hum >= 0) ? String(hum, 2).c_str() : "N/A",
-            (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
             (lux >= 0) ? String(lux, 2).c_str() : "N/A"
       );
     xQueueSend(mqttQueue, &dataMsg, 0);
@@ -379,12 +373,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Ping Arrived!");
     // Send back an ACK
     MqttMessage mqttMsg;
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
+    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_MC_HB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,gsm_available", DEVICE_ID);
     xQueueSend(mqttQueue, &mqttMsg, 0);
     
     LedBlink pingBlink = {CRGB::Green, 250, 2, 250};  // on_duraton, repeat, gap_duration
     xQueueSend(ledQueue, &pingBlink, 0);
+    return;
+  }
+
+  if(message == "data"){
+    Serial.println("Data Publish Command Arrived!");
+    publishData();
     return;
   }
   //====================================
