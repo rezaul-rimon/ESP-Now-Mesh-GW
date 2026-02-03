@@ -387,8 +387,109 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     publishData();
     return;
   }
-  //====================================
+//====================================//
 
+//=====RF Remote Setting Commands==========
+  #if defined(USE_RCSWITCH)
+    if (message.startsWith("set_remote:")) {
+
+      Serial.println("Set Remote Command Arrived!");
+
+      // Remove "set_remote:"
+      String payload = message.substring(strlen("set_remote:"));
+      // payload = "1/12345"
+
+      int slashIndex = payload.indexOf('/');
+      if (slashIndex == -1) {
+        Serial.println("Invalid format! Missing '/'");
+        return;
+      }
+
+      // Extract switch number and RF code
+      int switchNo = payload.substring(0, slashIndex).toInt();
+      unsigned long rfCode = payload.substring(slashIndex + 1).toInt();
+
+      // Validate switch number
+      if (switchNo < 1 || switchNo > 5) {
+        Serial.println("Invalid switch number!");
+        return;
+      }
+
+      Serial.print("Switch No: ");
+      Serial.println(switchNo);
+
+      Serial.print("RF Code: ");
+      Serial.println(rfCode);
+
+      // 👉 Here, store the RF code in appropriate variable
+
+      preferences.begin("rf_remote", false);
+      if(switchNo == 1){
+        RF_Remote_1 = rfCode;
+        preferences.putUInt("rf_remote_1", RF_Remote_1);
+        Serial.println("RF_Remote_1 set to: " + String(RF_Remote_1));
+      }
+      else if(switchNo == 2){
+        RF_Remote_2 = rfCode;
+        preferences.putUInt("rf_remote_2", RF_Remote_2);
+        Serial.println("RF_Remote_2 set to: " + String(RF_Remote_2));
+      }
+      else if(switchNo == 3){
+        RF_Remote_3 = rfCode;
+        preferences.putUInt("rf_remote_3", RF_Remote_3);
+        Serial.println("RF_Remote_3 set to: " + String(RF_Remote_3));
+      }
+      else if(switchNo == 4){
+        RF_Remote_4 = rfCode;
+        preferences.putUInt("rf_remote_4", RF_Remote_4);
+        Serial.println("RF_Remote_4 set to: " + String(RF_Remote_4));
+      }
+      else if(switchNo == 5){
+        RF_Remote_5 = rfCode;
+        preferences.putUInt("rf_remote_5", RF_Remote_5);
+        Serial.println("RF_Remote_5 set to: " + String(RF_Remote_5));
+      }
+      else{
+        Serial.println("Invalid switch number!");
+      }
+
+      preferences.end();
+
+      MqttMessage ackMsg;
+      snprintf(ackMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
+      snprintf(ackMsg.payload, MAX_MQTT_MSG_LEN, "%s,rf_remote_%d_set,%lu", DEVICE_ID, switchNo, rfCode);
+      xQueueSend(mqttQueue, &ackMsg, 0);
+
+      // 👉 Store / apply RF code
+      // setRemoteCode(switchNo, rfCode);
+
+      return;
+    }
+
+    if(message == "get_remotes"){
+      Serial.println("Get Remotes Command Arrived!");
+
+      preferences.begin("rf_remote", false);
+      RF_Remote_1 = preferences.getUInt("rf_remote_1", 0);
+      RF_Remote_2 = preferences.getUInt("rf_remote_2", 0);
+      RF_Remote_3 = preferences.getUInt("rf_remote_3", 0);
+      RF_Remote_4 = preferences.getUInt("rf_remote_4", 0);
+      RF_Remote_5 = preferences.getUInt("rf_remote_5", 0);
+      preferences.end();
+
+      MqttMessage remotesMsg;
+      snprintf(remotesMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
+      snprintf(remotesMsg.payload, MAX_MQTT_MSG_LEN, "%s,rf_remotes,%lu,%lu,%lu,%lu,%lu", DEVICE_ID,
+                RF_Remote_1, RF_Remote_2, RF_Remote_3, RF_Remote_4, RF_Remote_5);
+      xQueueSend(mqttQueue, &remotesMsg, 0);
+
+      return;
+    }
+
+  #endif
+  //============================================
+
+  //===================Main Part: CMD Sending==================
   int commaIndex = message.indexOf(',');
   if (commaIndex < 0) {
     Serial.println("⚠️ Format: node_id,command");
@@ -466,7 +567,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   // Only process known types
-  if (type != "smswt_hb" && type != "smswt_ack") {
+  if (type != "smswt_hb" && type != "smswt_ack" && type != "ack") {
     DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
     return;
   }
@@ -486,7 +587,7 @@ void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_HB);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
   }
-  else if (type == "smswt_ack"){
+  else if (type == "smswt_ack" || type == "ack"){
     snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_ACK);
     snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
 
@@ -728,6 +829,83 @@ void mainTask(void *param) {
     publishData();
 
   }
+
+  // **RF Signal Handling with Debounce and Bit Length Check**
+  #ifdef USE_RCSWITCH
+    unsigned long now = millis();
+    if (mySwitch.available()) {
+      unsigned long receivedCode = mySwitch.getReceivedValue();
+      int bitLength = mySwitch.getReceivedBitlength(); // Get bit length of the received signal
+
+      // **Ignore signals that do not match the expected bit length (e.g., < 24 bits)**
+      if (bitLength < 24) {  
+        DEBUG_PRINTLN(String("Ignored RF Signal: ") + String(receivedCode) + " (Bits: " + String(bitLength) + ")");
+        mySwitch.resetAvailable();
+        continue;;
+      }
+
+      // **Short-Term Global Debounce (Ignore if received within 100ms)**
+      if (now - lastRFGlobalReceivedTime < 100) {
+        mySwitch.resetAvailable();
+        continue;
+      }
+
+      // **Per-Sensor Debounce (Ignore same sensor within 2 sec)**
+      if (lastRFReceivedTimeMap.find(receivedCode) == lastRFReceivedTimeMap.end() || 
+          (now - lastRFReceivedTimeMap[receivedCode] > 2000)) {  
+
+        lastRFReceivedTimeMap[receivedCode] = now;  // Update per-sensor time
+        lastRFGlobalReceivedTime = now;  // Update global debounce
+
+        // **Debug Output**
+        DEBUG_PRINTLN(String("Valid RF Received: ") + String(receivedCode) + " (Bits: " + String(bitLength) + ")");
+
+        // Serial.println("RF_Remote_1: " + String(RF_Remote_1));
+        // Serial.println("RF_Remote_2: " + String(RF_Remote_2));
+        // Serial.println("RF_Remote_3: " + String(RF_Remote_3));
+        // Serial.println("RF_Remote_4: " + String(RF_Remote_4));
+        // Serial.println("RF_Remote_5: " + String(RF_Remote_5));
+
+        if(receivedCode == RF_Remote_1 || receivedCode == RF_Remote_3) {
+          
+          Message msg;
+          msg.sender_id = Local_ID;
+          msg.receiver_id = "9999999";
+          msg.command = "sw1:1";
+          msg.type = "cmd";
+          msg.msg_id = generateMessageID();
+
+          String payload3 = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
+          esp_now_send(broadcastAddress, (uint8_t*)payload3.c_str(), payload3.length());
+          Serial.println("📤 CMD Sent: " + payload3);
+        }
+        else if(receivedCode == RF_Remote_2 || receivedCode == RF_Remote_4) {
+          
+          Message msg;
+          msg.sender_id = Local_ID;
+          msg.receiver_id = "9999999";
+          msg.command = "sw1:0";
+          msg.type = "cmd";
+          msg.msg_id = generateMessageID();
+
+          String payload4 = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
+          esp_now_send(broadcastAddress, (uint8_t*)payload4.c_str(), payload4.length());
+          Serial.println("📤 CMD Sent: " + payload4);
+        }
+        else {
+          DEBUG_PRINTLN(String("RF Code ") + String(receivedCode) + " not recognized. Ignored.");
+        }
+        
+        // **Send Data to MQTT**
+        // char data[50];
+        // snprintf(data, sizeof(data), "%s,%lu", DEVICE_ID, receivedCode);
+        // client.publish(mqtt_pub_topic, data);
+        // DEBUG_PRINTLN(String("Data Sent to MQTT: ") + String(data));
+      }
+
+      mySwitch.resetAvailable();
+    }
+  #endif
     
     vTaskDelay(pdMS_TO_TICKS(100)); // Yield for watchdog
   }
@@ -971,6 +1149,20 @@ void setup() {
   preferences.end();
 
   //=========================================
+
+  #if defined(USE_RCSWITCH)
+    preferences.begin("rf_remote", false);  // Open Preferences (NVS)
+
+    RF_Remote_1 = preferences.getUInt("rf_remote_1", 1111111);
+    RF_Remote_2 = preferences.getUInt("rf_remote_2", 2222222);
+    RF_Remote_3 = preferences.getUInt("rf_remote_3", 3333333);
+    RF_Remote_4 = preferences.getUInt("rf_remote_4", 4444444);
+    RF_Remote_5 = preferences.getUInt("rf_remote_5", 5555555);
+
+    preferences.end();
+  #endif
+  //========================================//
+
   
   // Serial.println("Gateway ID: " + String(DEVICE_ID));
 
@@ -1034,6 +1226,10 @@ void setup() {
   peerInfo.encrypt = false;
   esp_now_add_peer(&peerInfo);
   esp_now_register_recv_cb(onReceive);
+
+  #ifdef USE_RCSWITCH
+    mySwitch.enableReceive(digitalPinToInterrupt(RF_PIN));
+  #endif
 
   mqttQueue = xQueueCreate(50, sizeof(MqttMessage));
   if (mqttQueue == NULL) {

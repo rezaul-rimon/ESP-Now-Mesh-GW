@@ -8,9 +8,29 @@
 // === Project Configuration === //
 // #define USE_SD_CARD
 #define USE_FastLED
-#define USE_LDR_SENSOR
+// #define USE_LDR_SENSOR
 // #define USE_GY30
+// #define USE_RCSWITCH
 //======================================//
+
+// Include RCSwitch library for RF communication
+#ifdef USE_RCSWITCH
+    #include <RCSwitch.h>
+    RCSwitch mySwitch = RCSwitch();
+
+    #include <map>
+    std::map<unsigned long, unsigned long> lastRFReceivedTimeMap;
+    unsigned long lastRFGlobalReceivedTime = 0;  // Global debounce
+
+    #define RF_PIN 26
+
+    unsigned int RF_Remote_1 = 0; // Example RF code for Remote 1
+    unsigned int RF_Remote_2 = 0; // Example RF code for Remote 2
+    unsigned int RF_Remote_3 = 0; // Example RF code for Remote 3
+    unsigned int RF_Remote_4 = 0; // Example RF code for Remote 4
+    unsigned int RF_Remote_5 = 0; // Example RF code for Remote 5
+#endif
+//======================================
 
 //Libraries required for GSM, MQTT, and ESP-NOW functionality
 #include <Arduino.h>
@@ -46,7 +66,7 @@ Preferences preferences;
     #define WORK_PACKAGE "1225"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "260121" 
-    #define DEVICE_SERIAL "0005"
+    #define DEVICE_SERIAL "0010"
 #endif
 
 const char* DEVICE_ID;
