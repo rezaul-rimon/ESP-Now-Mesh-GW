@@ -1,5 +1,5 @@
 // ✅ GATEWAY CODE (ESP-NOW CMD SENDER + ACK RECEIVER)
-#include <config.h>
+#include <main.h>
 
 //Function prototypes
 void networkTask(void *param); 
@@ -7,9 +7,6 @@ void mainTask(void *param);
 void ledTask(void *param);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void reconnectMqtt();
-void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len);
-String generateMessageID();
-bool isDuplicate(const String& msg_id);
 // void powerCycleModem();
 bool initializeModem();
 bool connectToNetwork();
@@ -40,96 +37,24 @@ String otaPath = otaPathDefault;
 volatile bool otaInProgress = false;
 //================================
 
-// NTC Sensor Configuration
-#if defined(USE_NTC_SENSOR)
-  float readNTCTemperatureC() {
-    uint32_t adcSum = 0;
-
-    for (int i = 0; i < SAMPLE_COUNT; i++) {
-        adcSum += analogRead(ADC_PIN);
-        delay(5);
-    }
-
-    float adcAvg = adcSum / (float)SAMPLE_COUNT;
-    float voltage = (adcAvg / ADC_MAX) * VREF;
-
-    float resistance = SERIES_RESISTOR * ((VREF / voltage) - 1.0);
-
-    float steinhart;
-    steinhart = resistance / NOMINAL_RESISTANCE;
-    steinhart = log(steinhart);
-    steinhart /= B_COEFFICIENT;
-    steinhart += 1.0 / (NOMINAL_TEMP + 273.15);
-    steinhart = 1.0 / steinhart;
-    steinhart -= 273.15;
-
-    // ✔ Apply calibration offset
-    return steinhart + OFFSET_TEMPERATURE;
-  }
-#endif
-//========================================//
-
 // Sensor reading functions
-#ifdef USE_HDC1080_SENSOR
-  void writeRegister(uint8_t reg) {
-    Wire.beginTransmission(HDC1080_ADDR);
-    Wire.write(reg);
-    Wire.endTransmission();
-  }
 
-  float readTemperature() {
-    writeRegister(0x00);  // Temperature register
-    delay(20);            // Wait for conversion (~15ms)
-    
-    Wire.requestFrom(HDC1080_ADDR, 2);
-    uint16_t raw = (Wire.read() << 8) | Wire.read();
-
-    // Convert raw data to Celsius (from datasheet)
-    return (raw / 65536.0) * 165.0 - 40.0;
-  }
-
-  float readHumidity() {
-    writeRegister(0x01);  // Humidity register
-    delay(20);            // Wait for conversion (~15ms)
-    
-    Wire.requestFrom(HDC1080_ADDR, 2);
-    uint16_t raw = (Wire.read() << 8) | Wire.read();
-
-    // Convert raw data to %RH (from datasheet)
-    return (raw / 65536.0) * 100.0;
-  }
+#ifdef USE_NTC_SENSOR
+  NTC ntcSensor(32); // GPIO35 analog pin
 #endif
-//==========================================================//
 
-// LDR to Lux conversion function
-#ifdef USE_LDR_SENSOR
-  float ldrToLux(int adc) {
-    // Known calibration points
-    const int ADC_vals[5] = {4048, 3800, 2096, 1966, 1600};
-    const float Lux_vals[5] = {961, 488, 16.67, 11.67, 10.83};
+#ifdef USE_MQ7_SENSOR 
+  MQ7 mq7(34);
+#endif
 
-    // If out of range
-    if(adc >= ADC_vals[0]) return Lux_vals[0];
-    if(adc <= ADC_vals[4]) return Lux_vals[4];
-
-    // Find which segment
-    for(int i=0; i<4; i++){
-        if(adc <= ADC_vals[i] && adc >= ADC_vals[i+1]){
-        float log_adc1 = log(ADC_vals[i]);
-        float log_adc2 = log(ADC_vals[i+1]);
-        float log_lux1 = log(Lux_vals[i]);
-        float log_lux2 = log(Lux_vals[i+1]);
-
-        float log_adc = log(adc);
-        float log_lux = log_lux1 + (log_lux2 - log_lux1) * (log_adc - log_adc1) / (log_adc2 - log_adc1);
-
-        return exp(log_lux);  // return interpolated Lux
-        }
-    }
-    return 0; // fallback
-  }
+#ifdef USE_ENS160_AHT21_SENSOR
+  ScioSense_ENS160 ens160(0x53); // FIXED ADDRESS
+  Adafruit_AHTX0 aht;
 #endif
 //==========================================================
+
+
+
 
 // Function to publish heartbeat message
 void publishHeartbeat(){
@@ -146,122 +71,118 @@ void publishHeartbeat(){
 
 // Function to publish sensor data
 void publishData(){
-  #ifdef USE_HDC1080_SENSOR
-    float temp2 = readTemperature();
-    float temp = readNTCTemperatureC();
-    float hum = readHumidity();
+  float temp = -1; 
+  float hum = -1;
+  float nh3 = -1;
+  float lux = -1;
+  uint16_t eco2 = -1;
+  uint16_t tvoc = -1;
+  float h2 = -1;
+  float ethanol = -1;
+  uint8_t aqi = -1;
+  float co = -1;
+  float noise = -1;
 
-    Serial.print("Temperature: ");
+  // NTC Sensor Reading
+  #ifdef USE_NTC_SENSOR
+    temp = ntcSensor.readTemperature();
+    Serial.print("NTC Temperature: ");
     Serial.print(temp, 2);
-    Serial.print(" °C  |  Humidity: ");
-    Serial.print(hum, 2);
-    Serial.println(" %");
+    Serial.println(" °C");
   #endif
 
-  #ifdef USE_LDR_SENSOR
-    Serial.print("LDR Value: ");
-    int ldrValue = analogRead(LDR_PIN);
-    Serial.print(ldrValue);
-    Serial.println();
+  // MQ-7 Sensor Reading
+  #ifdef USE_MQ7_SENSOR
+    co = mq7.readCO();
+  #endif
+  
+  // TVOC Sensor Reading
+  #if defined(USE_SGP30_SENSOR)
+  if (!sgp.IAQmeasure() || !sgp.IAQmeasureRaw())
+  {
+    Serial.println("SGP30 measurement failed");
+    delay(1000);
+        return;
+    }
 
-    float lux = ldrToLux(ldrValue);
-    lux = lux * 1.45; // Calibration factor
-    Serial.print("Calculated Lux: ");
-    Serial.print(lux, 2);
-    Serial.println(" lx");
+    float eco2 = sgp.eCO2;;
+    float tvoc = sgp.TVOC;
+    int16_t h2 = sgp.rawH2;
+    int16_t ethanol = sgp.rawEthanol;
+
+    Serial.print("eCO2: ");
+    Serial.print(eco2);
+    Serial.print(" ppm | ");
+
+    Serial.print("TVOC: ");
+    Serial.print(tvoc);
+    Serial.print(" ppb | ");
+
+    Serial.print("H2: ");
+    Serial.print(h2);
+    Serial.print(" | ");
+
+    Serial.print("Ethanol: ");
+    Serial.println(ethanol);
+
   #endif
 
-  #ifdef USE_NH3_SENSOR
-    float adcValue = analogRead(NH3_PIN);
-    Serial.print("Ammonia Sensor ADC Value: ");
-    Serial.println(adcValue);
+  // ENS160 + AHT21 Sensor Reading
+  #if defined(USE_ENS160_AHT21_SENSOR)
+    sensors_event_t humidity, temperature;
+    aht.getEvent(&humidity, &temperature);
 
-    float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
-    Serial.print("RL Voltage: ");
-    Serial.print(voltageL, 3);
-    Serial.println(" V");
+    float temp2 = temperature.temperature;
+    hum = humidity.relative_humidity;
 
-    float voltageS = 3.3 - voltageL;
-    Serial.print("Rs Voltage: ");
-    Serial.print(voltageS, 3);
-    Serial.println(" V");
+    // ---- Compensation ----
+    uint16_t tempK = (temp2 + 273.15) * 100;
+    uint16_t hum100 = hum * 100;
 
-    float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
-    Serial.print("Calculated Rs: ");
-    Serial.print(Rs, 2);
-    Serial.println(" Ohm");
+    ens160.set_envdata(tempK, hum100);
 
-    float ratio = Rs / 10000.0; // RL = 10k Ohm
-    float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
-    Serial.print("Calculated Ammonia Concentration: ");
-    Serial.print(ppm, 2);
-    Serial.println(" ppm");
+    // ---- Measure ----
+    ens160.measure(true);
+
+    aqi = ens160.getAQI();
+    Serial.print("AQI: ");
+    Serial.print(aqi);
+    tvoc = ens160.getTVOC();
+    Serial.print(" | TVOC: ");
+    Serial.print(tvoc);
+    eco2 = ens160.geteCO2();
+    Serial.print(" | eCO2: ");
+    Serial.print(eco2);
   #endif
+
   Serial.println("-----------------------------------");
 
-    // Prepare and send MQTT data message
-    MqttMessage dataMsg;
-    snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
-    snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
-            DEVICE_ID,
-            (temp >= 0) ? String(temp, 2).c_str() : "N/A",
-            (hum >= 0) ? String(hum, 2).c_str() : "N/A",
-            (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
-            (lux >= 0) ? String(lux, 2).c_str() : "N/A"
-      );
-    xQueueSend(mqttQueue, &dataMsg, 0);
+  // Prepare and send MQTT data message
+  MqttMessage dataMsg;
+  snprintf(dataMsg.topic, MAX_TOPIC_LEN, MQTT_MC_PUB);
+  snprintf(dataMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
+          DEVICE_ID,
+          (temp >= 0) ? String(temp, 2).c_str() : "N/A",
+          (hum >= 0) ? String(hum, 2).c_str() : "N/A",
+          (nh3 >= 0) ? String(nh3, 2).c_str() : "N/A",
+          (lux >= 0) ? String(lux, 2).c_str() : "N/A",
+          (eco2 >= 0) ? String(eco2).c_str() : "N/A",
+          (tvoc >= 0) ? String(tvoc).c_str() : "N/A",
+          (h2 >= 0) ? String(h2).c_str() : "N/A",
+          (ethanol >= 0) ? String(ethanol).c_str() : "N/A",
+          (aqi >= 0) ? String(aqi).c_str() : "N/A",
+          (co >= 0) ? String(co, 2).c_str() : "N/A",
+          (noise >= 0) ? String(noise, 2).c_str() : "N/A"
+    );
 
+    Serial.println(dataMsg.payload);
+    
+    xQueueSend(mqttQueue, &dataMsg, 0);
     LedBlink dataBlink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
     xQueueSend(ledQueue, &dataBlink, 0);
 
-    // TVOC Sensor Reading
-    #if defined(USE_TVOC_SENSOR)
-      if (!sgp.IAQmeasure() || !sgp.IAQmeasureRaw())
-      {
-          Serial.println("SGP30 measurement failed");
-          delay(1000);
-          return;
-      }
-
-      float eco2 = sgp.eCO2;;
-      float tvoc = sgp.TVOC;
-      int16_t h2 = sgp.rawH2;
-      int16_t ethanol = sgp.rawEthanol;
-
-      Serial.print("eCO2: ");
-      Serial.print(eco2);
-      Serial.print(" ppm | ");
-
-      Serial.print("TVOC: ");
-      Serial.print(tvoc);
-      Serial.print(" ppb | ");
-
-      Serial.print("H2: ");
-      Serial.print(h2);
-      Serial.print(" | ");
-
-      Serial.print("Ethanol: ");
-      Serial.println(ethanol);
-
-      MqttMessage dataMsg2;
-      snprintf(dataMsg2.topic, MAX_TOPIC_LEN, MQTT_MC_PUB2);
-      snprintf(dataMsg2.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s,%s,%s",
-              DEVICE_ID,
-              (eco2 >= 0) ? String(eco2, 2).c_str() : "N/A",
-              (tvoc >= 0) ? String(tvoc, 2).c_str() : "N/A",
-              (h2 >= 0) ? String(h2).c_str() : "N/A",
-              (ethanol >= 0) ? String(ethanol).c_str() : "N/A"
-        );
-      xQueueSend(mqttQueue, &dataMsg2, 0);
-
-      LedBlink data2Blink = {CRGB::Green, 500, 2, 300};  // on_duraton, repeat, gap_duration
-      xQueueSend(ledQueue, &data2Blink, 0);
-
-    #endif
-
 }
 //========================================//
-
 
 // Function to connect to GSM network
 // ---- Safe delay that feeds watchdog ----
@@ -516,117 +437,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   //====================================
 
-  int commaIndex = message.indexOf(',');
-  if (commaIndex < 0) {
-    Serial.println("⚠️ Format: node_id,command");
-    LedBlink cmdErrorBlink = {CRGB::Orange, 150, 2, 150};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &cmdErrorBlink, 0);
-    return;
-  }
-
-  Message msg;
-  msg.sender_id = Local_ID;
-  msg.receiver_id = message.substring(0, commaIndex);
-  msg.command = message.substring(commaIndex + 1);
-  msg.type = "cmd";
-  msg.msg_id = generateMessageID();
-
-  String payload2 = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
-  esp_now_send(broadcastAddress, (uint8_t*)payload2.c_str(), payload2.length());
-  Serial.println("📤 CMD Sent: " + payload2);
-
   // You can add command handling here if needed
 }
-//==========================================================//
-
-// Function to check for duplicate ACKs
-bool isDuplicate(const String& type, const String& msg_id) {
-  String key = type + ":" + msg_id;
-  if (std::find(recentMsgKeys.begin(), recentMsgKeys.end(), key) != recentMsgKeys.end()) {
-    return true;
-  }
-  recentMsgKeys.push_back(key);
-  if (recentMsgKeys.size() > maxRecentIDs) {
-    recentMsgKeys.pop_front();
-  }
-  return false;
-}
-//========================================//
-
-// Function to generate a unique message ID
-String generateMessageID() {
-  uint16_t randNum = esp_random() & 0xFFFF;
-  // Serial.print("Raw 16-bit randNum: ");
-  // Serial.println(randNum);
-  char id[5];
-  sprintf(id, "%04X", randNum);
-  return String(id);
-}
-//========================================//
-
-// Callback function for receiving ESP-NOW messages
-void onReceive(const uint8_t *mac, const uint8_t *incomingData, int len) {
-  String msg((char*)incomingData, len);
-  DEBUG_PRINTLN("\n📥 Received: " + msg);
-
-  int commaCount = std::count(msg.begin(), msg.end(), ',');
-  if (commaCount != 4) {
-    DEBUG_PRINTLN("❌ Invalid message format. Skipped.");
-    return;
-  }
-
-  int idx1 = msg.indexOf(',');
-  int idx2 = msg.indexOf(',', idx1 + 1);
-  int idx3 = msg.indexOf(',', idx2 + 1);
-  int idx4 = msg.indexOf(',', idx3 + 1);
-
-  String sender_id   = msg.substring(0, idx1);
-  String receiver_id = msg.substring(idx1 + 1, idx2);
-  String command     = msg.substring(idx2 + 1, idx3);
-  String type        = msg.substring(idx3 + 1, idx4);
-  String msg_id      = msg.substring(idx4 + 1);
-  
-  // 🔁 Deduplication for ALL types
-  if (isDuplicate(type, msg_id)) {
-    DEBUG_PRINTLN("⚠️ Duplicate " + type + " ignored (id=" + msg_id + ")");
-    return;
-  }
-
-  // Only process known types
-  if (type != "smswt_hb" && type != "smswt_ack") {
-    DEBUG_PRINTLN("⏭ Ignored unknown type: " + type);
-    return;
-  }
-
-  #if DEBUG_MODE
-    Serial.printf("✅ %s Received: sender=%s → receiver=%s | cmd=%s | id=%s\n",
-                  type.c_str(), sender_id.c_str(), receiver_id.c_str(),
-                  command.c_str(), msg_id.c_str());
-  #endif
-
-  // Prepare MQTT message
-  MqttMessage mqttMsg;
-
-
-  //Smart Switch MQTT Topics
-  if (type == "smswt_hb"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_HB);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-  }
-  else if (type == "smswt_ack"){
-    snprintf(mqttMsg.topic, MAX_TOPIC_LEN, MQTT_SMARTSWITCH_ACK);
-    snprintf(mqttMsg.payload, MAX_MQTT_MSG_LEN, "%s,%s,%s", DEVICE_ID, sender_id.c_str(), command.c_str());
-
-    LedBlink ackBlink = {CRGB::Green, 150, 1, 150};  // on_duraton, repeat, gap_duration
-    xQueueSend(ledQueue, &ackBlink, 0);
-  }
-
-  xQueueSend(mqttQueue, &mqttMsg, 0);
-
-  // Re-broadcast if needed
-  // rebroadcastIfNeeded(msg_id, type, msg);
-}
-//========================================//
+//==========================================================/
 
 
 // =============================
@@ -810,30 +623,6 @@ void mainTask(void *param) {
   esp_task_wdt_add(NULL);
   for (;;) {
     esp_task_wdt_reset();
-    // 📥 Serial command handler
-    /*
-    if (Serial.available()) {
-      String input = Serial.readStringUntil('\n');
-      input.trim(); input.replace(" ", "");
-      Serial.println("📥 Input: " + input);
-
-      int commaIndex = input.indexOf(',');
-      if (commaIndex < 0) {
-        Serial.println("⚠️ Format: receiver_id,command");
-      } else {
-        Message msg;
-        msg.sender_id = Local_ID;
-        msg.receiver_id = input.substring(0, commaIndex);
-        msg.command = input.substring(commaIndex + 1);
-        msg.type = "cmd";
-        msg.msg_id = generateMessageID();
-
-        String payload = msg.sender_id + "," + msg.receiver_id + "," + msg.command + "," + msg.type + "," + msg.msg_id;
-        esp_now_send(broadcastAddress, (uint8_t*)payload.c_str(), payload.length());
-        Serial.println("📤 CMD Sent: " + payload);
-      }
-    }
-    */
 
     // 💓 Heartbeat via MQTT queue
     if (millis() - lastHBPublishTime >= hbPublishInterval) {
@@ -1118,23 +907,38 @@ void setup() {
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
 
-  #ifdef USE_HDC1080_SENSOR
-    Serial.println("🔄 Initializing HDC1080 Sensor...");
-    // Configuration register: 14-bit temp + 14-bit humidity
-    Wire.begin(21, 22);  // SDA, SCL
-    Wire.beginTransmission(HDC1080_ADDR);
-    Wire.write(0x02);
-    Wire.write(0x10); // Bit7=0 Temp first, Bits[10:8]=000 (14-bit)
-    Wire.write(0x00);
-    Wire.endTransmission();
-    delay(15);
-    Serial.println("\n✅ HDC1080 Temperature & Humidity Sensor Test");
+  #ifdef USE_ENS160_AHT21_SENSOR
+    Serial.println("🔄 Initializing ENS160/AHT21 Sensor...");
+    Wire.begin(SDA_PIN, SCL_PIN, 100000); // stable I2C
+
+    Serial.print("AHT21...");
+    if (!aht.begin()) {
+      Serial.println("failed!");
+      while (1);
+    }
+    Serial.println("done.");
+
+    ens160.begin();
+
+    if (ens160.available()) {
+      Serial.println("done.");
+
+      Serial.print("Rev: ");
+      Serial.print(ens160.getMajorRev());
+      Serial.print(".");
+      Serial.print(ens160.getMinorRev());
+      Serial.print(".");
+      Serial.println(ens160.getBuild());
+
+      Serial.print("Set mode...");
+      Serial.println(ens160.setMode(ENS160_OPMODE_STD) ? "done" : "failed");
+    } else {
+      Serial.println("failed!");
+      while (1);
+    }
   #endif
 
-  pinMode(LDR_PIN, INPUT);
-  pinMode(NH3_PIN, INPUT);
-
-  #if defined(USE_TVOC_SENSOR)
+  #if defined(USE_SGP30_SENSOR)
     Serial.println("🔄 Initializing SGP30 Sensor...");
     if (!sgp.begin()) {
       Serial.println("SGP30 not detected");
@@ -1151,21 +955,6 @@ void setup() {
   mqtt.setServer(broker, MQTT_PORT);
   mqtt.setKeepAlive(60);
   mqtt.setCallback(mqttCallback);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("❌ ESP-NOW Init Failed");
-    return;
-  }
-
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-  esp_now_add_peer(&peerInfo);
-  esp_now_register_recv_cb(onReceive);
 
   mqttQueue = xQueueCreate(50, sizeof(MqttMessage));
   if (mqttQueue == NULL) {

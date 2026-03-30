@@ -8,11 +8,10 @@
 // Project Configuration
 #define USE_SD_CARD false
 #define USE_FastLED
-#define USE_HDC1080_SENSOR
-#define USE_LDR_SENSOR
-#define USE_NH3_SENSOR
 #define USE_NTC_SENSOR
-// #define USE_TVOC_SENSOR
+// #define USE_SGP30_SENSOR
+#define USE_ENS160_AHT21_SENSOR
+#define USE_MQ7_SENSOR
 
 //======================================//
 
@@ -31,7 +30,9 @@
 #include <Preferences.h>
 #include <Update.h>
 #include <Wire.h>
-#include <Adafruit_SGP30.h>
+// #include <Adafruit_SGP30.h>
+#include "ScioSense_ENS160.h"
+#include <Adafruit_AHTX0.h>
 
 
 #define CONFIG_TASK_WDT_DEBUG 1
@@ -50,39 +51,18 @@ Preferences preferences;
 
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1178"
-    #define GW_TYPE "00"
-    #define FIRMWARE_UPDATE_DATE "260107" 
-    #define DEVICE_SERIAL "0003"
+    #define GW_TYPE "03"
+    #define FIRMWARE_UPDATE_DATE "260222" 
+    #define DEVICE_SERIAL "0001"
 #endif
 
 const char* DEVICE_ID;
 //========================================//
 
-// NTC Sensor Configuration
-#if defined(USE_NTC_SENSOR)
-    #define ADC_PIN            35        // GPIO36 (ADC1_CH0)
-    #define ADC_MAX            4095.0
-    #define VREF               3.6        // ESP32 ADC reference
-    #define SERIES_RESISTOR    10000.0    // 10k fixed resistor
-    #define NOMINAL_RESISTANCE 10000.0    // 10k NTC @ 25C
-    #define NOMINAL_TEMP       25.0       // °C
-    #define B_COEFFICIENT      3950.0
-    #define SAMPLE_COUNT       20         // ADC averaging
-    #define OFFSET_TEMPERATURE      0.0f        // Calibration offset
-#endif
-//========================================//
-
-#if defined(USE_TVOC_SENSOR)
-    Adafruit_SGP30 sgp;
-#endif
-//========================================//
-
-const char* Local_ID = "gw1"; // Gateway ID
-uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 //Timers for publishing dat/a and heartbeat
 unsigned long lastDataPublishTime = 0;
-const unsigned long dataPublishInterval = 5 * 60 * 1000;
+const unsigned long dataPublishInterval = 1 * 60 * 1000;
 
 unsigned long lastHBPublishTime = 0;
 const unsigned long hbPublishInterval = 2 * 60 * 1000;
@@ -93,25 +73,14 @@ bool snapshotSentThisHour = false;
 bool ledState = false;
 //========================================//
 
+#define SDA_PIN 21
+#define SCL_PIN 22
+
 //FastLED library for controlling LEDs
 #ifdef USE_FastLED
     #define LED_PIN 27
     #define NUM_LEDS 1
     CRGB leds[NUM_LEDS];
-#endif
-//========================================//
-
-// Sensor configuration
-#ifdef USE_LDR_SENSOR
-    #define LDR_PIN 32 // Pin for LDR sensor
-#endif
-
-#ifdef USE_NH3_SENSOR
-    #define NH3_PIN 34 // Pin for Ammonia sensor
-#endif
-
-#ifdef USE_HDC1080_SENSOR
-    #define HDC1080_ADDR 0x40
 #endif
 //========================================//
 
@@ -144,14 +113,10 @@ const char* otaPathDefault = "/download/MC251015.bin";
 // MQTT settings
 char mqttSubTopic[64]; 
 #define MQTT_PORT 1883
-#define MQTT_MC_PUB "DMA/MC/PUB"
-#define MQTT_MC_PUB2 "DMA/MC/PUB2"
-#define MQTT_MC_SUB "DMA/MC/SUB"
-#define MQTT_MC_HB "DMA/MC/HB"
-#define MQTT_OTA_PUB "DMA/MC/OTA"
-
-#define MQTT_SMARTSWITCH_HB "DMA/SmartSwitch/HB"
-#define MQTT_SMARTSWITCH_ACK "DMA/SmartSwitch/PUB"
+#define MQTT_MC_PUB "DMA/Cattle/PUB"
+#define MQTT_MC_SUB "DMA/Cattle/SUB"
+#define MQTT_MC_HB "DMA/Cattle/HB"
+#define MQTT_OTA_PUB "DMA/Cattle/OTA"
 
 //Struct to hold message data
 #define MAX_MQTT_MSG_LEN 128
@@ -162,14 +127,6 @@ typedef struct {
     char payload[MAX_MQTT_MSG_LEN];
 } MqttMessage;
 
-struct Message {
-    String sender_id;
-    String receiver_id;
-    String command;
-    String type;
-    String msg_id;
-};
-
 typedef struct {
     CRGB color;
     uint16_t duration;  // ms
@@ -177,6 +134,3 @@ typedef struct {
     uint16_t gap;       // optional gap between blinks
 } LedBlink;
 
-
-std::deque<String> recentMsgKeys;
-const size_t maxRecentIDs = 20;
