@@ -60,13 +60,13 @@ Preferences preferences;
 //==========================================//
 
 //Device Configuration
-#define CHANGE_DEICE_ID 0
+#define CHANGE_DEICE_ID 1
 
 #if CHANGE_DEICE_ID
     #define WORK_PACKAGE "1225"
     #define GW_TYPE "03"
     #define FIRMWARE_UPDATE_DATE "260121" 
-    #define DEVICE_SERIAL "0010"
+    #define DEVICE_SERIAL "0110"
 #endif
 
 const char* DEVICE_ID;
@@ -106,6 +106,8 @@ bool ledState = false;
     BH1750 lightMeter(0x23);
 #endif
 //========================================//
+
+#define horn 25
 
 // GSM settings
 #define SerialAT Serial1

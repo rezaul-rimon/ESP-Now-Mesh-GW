@@ -270,6 +270,7 @@ void reconnectMqtt() {
 
             snprintf(mqttSubTopic, sizeof(mqttSubTopic), "%s/%s", MQTT_MC_SUB, DEVICE_ID);
             mqtt.subscribe(mqttSubTopic);
+            Serial.printf("[MQTT] Subscribed to topic: %s\n", mqttSubTopic);
 
             leds[0] = CRGB::Green; // indicate connected
             FastLED.show();
@@ -365,6 +366,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     xQueueSend(ledQueue, &otaBlink, 0);
     delay(1000);
     return;
+}
+
+if(message == "hogamarse"){
+  digitalWrite(horn, HIGH);
+}
+else if(message == "hogamareni"){
+  digitalWrite(horn, HIGH);
+  vTaskDelay(pdMS_TO_TICKS(200));
+  digitalWrite(horn, LOW);
 }
 
 
@@ -1184,6 +1194,10 @@ void setup() {
   Serial.println("🔄 Starting Gateway...");
   DEBUG_PRINT("Device ID: ");
   DEBUG_PRINTLN(DEVICE_ID);
+
+  pinMode(25, OUTPUT); // For testing purposes (toggle on "hoga marse" command)
+  digitalWrite(25, LOW);
+  vTaskDelay(pdMS_TO_TICKS(100));
 
   // ---- LDR SENSOR SETUP ----
   #ifdef USE_LDR_SENSOR
